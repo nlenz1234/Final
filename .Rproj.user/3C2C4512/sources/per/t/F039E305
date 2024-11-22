@@ -3,7 +3,7 @@
     "path": "C:/Data/Fall 2024/CPLN 5920/Code/musa_5080_2024/Week_8/Bike_Share_Time_Space_2021.Rmd",
     "project_path": null,
     "type": "r_markdown",
-    "hash": "0",
+    "hash": "1352453071",
     "contents": "",
     "dirty": false,
     "created": 1732234362338.0,
@@ -11,7 +11,9 @@
     "relative_order": 2,
     "properties": {
         "source_window_id": "",
-        "Source": "Source"
+        "Source": "Source",
+        "cursorPosition": "45,0",
+        "scrollLine": "35"
     },
     "folds": "",
     "lastKnownWriteTime": 1725573573,
