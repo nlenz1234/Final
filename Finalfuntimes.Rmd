@@ -1,0 +1,179 @@
+---
+title: "Finalfuntimes"
+output: html_document
+date: "2024-11-22"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(dplyr)
+library(stringr)
+library(tidyverse)
+library(sf)
+library(lubridate)
+library(tigris)
+library(tidycensus)
+library(viridis)
+library(riem)
+library(gridExtra)
+library(knitr)
+library(kableExtra)
+library(RSocrata)
+```
+
+
+
+```{r}
+data <- read.csv('trains_train.csv') %>% 
+  filter(to != "000000000") %>% 
+  mutate(
+    OD = paste(from, to, sep = "/"),
+    Type = ifelse(
+      str_detect(vehicle, "[A-Za-z]"),
+      str_extract(vehicle, "^[A-Za-z]+"),
+      "Extra"))
+```
+
+
+```{r time_bins }
+data <- data %>%
+  mutate(
+    # Clean any leading/trailing spaces in the 'time' column
+    time_cleaned = trimws(time),
+  
+    # Convert 'time' from 12-hour AM/PM format to 24-hour format
+    time_24hr = format(parse_date_time(time_cleaned, orders = "HMS p"), "%H:%M:%S")
+  )
+
+```
+
+```{r}
+
+# Assuming 'date' is in 'yyyy-mm-dd' format and 'time' is in 'hh:mm:ss AM/PM' format
+data <- data %>%
+  mutate(
+    # Combine 'date' and 'time' columns into a single datetime object
+    datetime_combined = ymd(date) + hms(time_24hr),
+    
+    # Round to the nearest hour
+    interval60 = floor_date(datetime_combined, unit = "hour"),
+    
+    # Round to the nearest 15 minutes
+    interval15 = floor_date(datetime_combined, unit = "15 minutes"),
+    
+    interval30 = floor_date(datetime_combined, unit = "30 minutes"),
+    
+    # Extract the week and day of the week
+    week = week(interval60),
+    dotw = wday(interval60, label = TRUE)
+  )
+
+
+```
+
+```{r}
+data$interval60 <- as.POSIXct(data$interval60, format="%Y-%m-%d %H:%M:%S")
+
+# Add a new column 'hour' by extracting the hour from the 'interval60' column
+data$hour <- format(data$interval60, "%H")
+
+
+```
+
+```{r}
+
+
+data$minute <- format(data$interval30, "%M")  # Minute as a string (e.g., "30")
+
+# Convert the minute to numeric
+data$minute <- as.numeric(data$minute)
+
+# Create a new column 'half_hour_interval' that represents hours and half-hours (e.g., 23.0 and 23.5)
+data$halfhour <- ifelse(data$minute >= 30, 
+                                  as.numeric(data$hour) + 0.5, 
+                                  as.numeric(data$hour))
+
+
+```
+
+
+```{r}
+data$is_weekend <- ifelse(weekdays(data$interval60) %in% c("Saturday", "Sunday"), "Weekend", "Weekday")
+
+```
+
+```{r}
+data$reclassified_occupancy <- ifelse(data$occupancy == "medium", "low", data$occupancy)
+
+```
+
+```{r}
+data$occupancy_classifier <- ifelse(data$occupancy == "high", 1, 0)
+
+```
+
+```{r}
+high_occupancy_count <- data %>%
+  group_by(dotw, hour) %>%
+  summarise(high_occupancy_count = sum(occupancy_classifier))
+
+# Merge the aggregated data back into the original dataframe
+data <- left_join(data, high_occupancy_count, by = c("dotw", "hour"))
+
+```
+
+```{r}
+high_occupancy_count_half <- data %>%
+  group_by(dotw, halfhour) %>%
+  summarise(high_occupancy_counthalf = sum(occupancy_classifier, na.rm=TRUE))
+
+```
+
+
+```{r hour plot}
+
+ggplot(data, aes(x = dotw, y = hour, fill = high_occupancy_count)) +
+  geom_tile() +  # Use tiles to represent occupancy counts
+  scale_fill_gradient(low = "white", high = "red") +  # Color scale (white for low, red for high)
+  labs(title = "High Occupancy Train Counts Across the Week",
+       x = "Day of the Week",
+       y = "Hour of the Day",
+       fill = "High Occupancy Count") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))  
+
+```
+
+```{r half hour plot}
+
+ggplot(high_occupancy_count_half, aes(x = dotw, y = halfhour, fill = high_occupancy_counthalf)) +
+  geom_tile() +  # Use tiles to represent occupancy counts
+  scale_fill_gradient(low = "white", high = "red") +  # Color scale (white for low, red for high)
+  labs(title = "High Occupancy Train Counts Across the Week- Half Hour Interval",
+       x = "Day of the Week",
+       y = "Hour of the Day",
+       fill = "High Occupancy Count Half Hour") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))  
+
+```
+
+
+
+
+
+
+
+
