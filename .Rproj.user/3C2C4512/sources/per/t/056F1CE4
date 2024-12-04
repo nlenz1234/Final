@@ -3,7 +3,7 @@
     "path": "C:/Data/Fall 2024/CPLN 5920/Code/Final/Script1121.Rmd",
     "project_path": "Script1121.Rmd",
     "type": "r_markdown",
-    "hash": "2439175141",
+    "hash": "1324653864",
     "contents": "",
     "dirty": false,
     "created": 1732234351377.0,
@@ -13,16 +13,16 @@
         "tempName": "Untitled1",
         "source_window_id": "",
         "Source": "Source",
-        "cursorPosition": "7,80",
-        "scrollLine": "0",
-        "last_setup_crc32": "6ee72f6d59115e95"
+        "cursorPosition": "99,3",
+        "scrollLine": "90",
+        "last_setup_crc32": "406fd1e659115e95"
     },
     "folds": "",
-    "lastKnownWriteTime": 1732246378,
+    "lastKnownWriteTime": 1732301747,
     "encoding": "UTF-8",
     "collab_server": "",
     "source_window": "",
-    "last_content_update": 1732246378777,
+    "last_content_update": 1732301747174,
     "read_only": false,
     "read_only_alternatives": []
 }

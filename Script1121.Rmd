@@ -9,6 +9,7 @@ https://docs.google.com/document/d/1Q9j6WZ54YXz71wHLA6temmkFtY7Rwml2vAGG0MKIdsA/
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(dev = "null", echo = TRUE)
+Sys.setlocale("LC_TIME", "C")
 ```
 
 ```{r}

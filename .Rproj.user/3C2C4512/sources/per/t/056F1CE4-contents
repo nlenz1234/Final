@@ -92,7 +92,7 @@ ggplot(data = stations_sf %>% filter(country == "be") %>% filter(!is.na(to_avg))
 ```{r}
 od_data <- data %>%
   group_by(OD) %>%
-  filter(n() > 3) %>%  
+  #filter(n() > 3) %>%  
   summarize(
     avg_occupancy = mean(occupancy_numeric, na.rm = TRUE),
     from = first(from),
@@ -111,13 +111,23 @@ od_lines <- od_with_coords %>%
   mutate(geometry = st_sfc(st_linestring(matrix(c(from_long, from_lat, to_long, to_lat), ncol = 2, byrow = TRUE)), crs = 4326)) %>%
   st_as_sf()
 
+bbox <- stations_sf %>%
+  filter(country == "be") %>%
+  st_bbox()
+
 ggplot() +
   geom_sf(data = stations_sf %>% filter(country == "be"), color = "black", size = 2) +
   geom_sf(data = od_lines, aes(color = avg_occupancy), size = 2, alpha = 0.7) +  
   scale_color_gradient(low = "grey80", high = "firebrick") +
   theme_minimal() +
+  coord_sf(
+    xlim = c(bbox["xmin"], bbox["xmax"]),
+    ylim = c(bbox["ymin"], bbox["ymax"]),
+    expand = FALSE
+  ) +
   labs(title = "OD Connections with Avg Occupancy",
        x = "Longitude",
        y = "Latitude")
+
 
 ```
