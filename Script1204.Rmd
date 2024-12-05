@@ -369,7 +369,7 @@ ggplot(testProbs2, aes(d = as.numeric(Outcome), m = Probs)) +
 ```
 
 ```{r}
-threshold <- 0.5  
+threshold <- 0.4  
 
 dataTest_factor <- dataTest %>%
   mutate(occupancy_classifier = factor(occupancy_classifier, 
