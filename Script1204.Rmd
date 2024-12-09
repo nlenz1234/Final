@@ -382,7 +382,7 @@ data_model <- data %>% dplyr::select(occupancy_classifier, datetime_combined, do
                                Temperature, Precipitation, OD_passenger, from, to, freq) %>%
   mutate(dotw = as.character(dotw), hour = as.factor(hour))
 
-set.seed(1000)
+set.seed(1234)
 trainIndex <- createDataPartition(data_model$occupancy_classifier, p = 0.7, list = FALSE, times = 1)
 
 dataTrain <- data_model[trainIndex, ]
@@ -560,7 +560,7 @@ ggplot(testProbs, aes(d = as.numeric(Outcome), m = Probs)) +
 ```
 
 ```{r}
-threshold <- 0.4  
+threshold <- 0.34  
 
 dataTest_factor <- dataTest %>%
   mutate(occupancy_classifier = factor(occupancy_classifier, 
@@ -593,11 +593,62 @@ print(confusion_matrix)
 ```
 
 ```{r}
+iterateThresholds <- function(data) {
+  x = .01
+  all_prediction <- data.frame()
+  while (x <= 1) {
+    
+    this_prediction <-
+      testProbs %>%
+      mutate(predOutcome = ifelse(Probs > x, "High", "Low")) %>%
+      count(predOutcome, Outcome) %>%
+      summarize(True_Negative = sum(n[predOutcome=="Low" & Outcome=="Low"]),
+                True_Positive = sum(n[predOutcome=="High" & Outcome=="High"]),
+                False_Negative = sum(n[predOutcome=="Low" & Outcome=="High"]),
+                False_Positive = sum(n[predOutcome=="High" & Outcome=="Low"])) %>%
+      gather(Variable, Count) %>%
+      mutate(Revenue =
+               ifelse(Variable == "True_Negative", 0 * Count,
+                      ifelse(Variable == "True_Positive", 2 * Count,
+                             ifelse(Variable == "False_Negative", 0 * Count,
+                                    ifelse(Variable == "False_Positive", (-1) * Count, 0)))),
+             Threshold = x)
+    
+    all_prediction <- rbind(all_prediction, this_prediction)
+    x <- x + .01
+  }
+  return(all_prediction)
+}
+
+whichThreshold <- iterateThresholds(testProbs)
+
+whichThreshold_revenue <- 
+  whichThreshold %>% 
+  group_by(Threshold) %>% 
+  summarize(Revenue = sum(Revenue))
+
+optimal_threshold <- whichThreshold_revenue %>% 
+  filter(Revenue == max(Revenue)) %>% 
+  pull(Threshold)
+
+ggplot(whichThreshold_revenue) +
+  geom_line(aes(x = Threshold, y = Revenue), color = "#FF006A", size = 1) +
+  geom_vline(xintercept = pull(arrange(whichThreshold_revenue, -Revenue)[1, 1]), 
+             color = "#981FAC", size = 1, linetype = 3) +
+  annotate("text", x = optimal_threshold[1], y = 0, 
+           label = paste("Optimal Threshold:", optimal_threshold[1]), 
+           hjust = -0.1, vjust = -0.5, color = "black", size = 4) +
+  labs(title = "Model Revenues By Threshold For Test Sample",
+       subtitle = "Vertical Line Denotes Optimal Threshold") +
+  theme(plot.caption = element_text(hjust = 0))
+```
+
+```{r}
 results <- list()
 
 for (i in 1:100) {
   
-set.seed(312+i)
+set.seed(606+i)
 trainIndex <- createDataPartition(data_model$occupancy_classifier, p = 0.7, list = FALSE, times = 1)
 
 dataTrain <- data_model[trainIndex, ]
@@ -710,7 +761,7 @@ testProbs <- data.frame(Outcome = as.factor(dataTest$occupancy_classifier),
 
 auc_value <- auc(testProbs$Outcome, testProbs$Probs)
 
-threshold <- 0.4  
+threshold <- 0.34  
 
 dataTest_factor <- dataTest %>%
   mutate(occupancy_classifier = factor(occupancy_classifier, 
@@ -730,18 +781,60 @@ confusion_matrix <- confusionMatrix(testProbs$Predicted, testProbs$Outcome, posi
 sensitivity <- confusion_matrix$byClass["Sensitivity"]
 specificity <- confusion_matrix$byClass["Specificity"]
 
+iterateThresholds <- function(data) {
+  x = .01
+  all_prediction <- data.frame()
+  while (x <= 1) {
+    
+    this_prediction <-
+      testProbs %>%
+      mutate(predOutcome = ifelse(Probs > x, "High", "Low")) %>%
+      count(predOutcome, Outcome) %>%
+      summarize(True_Negative = sum(n[predOutcome=="Low" & Outcome=="Low"]),
+                True_Positive = sum(n[predOutcome=="High" & Outcome=="High"]),
+                False_Negative = sum(n[predOutcome=="Low" & Outcome=="High"]),
+                False_Positive = sum(n[predOutcome=="High" & Outcome=="Low"])) %>%
+      gather(Variable, Count) %>%
+      mutate(Revenue =
+               ifelse(Variable == "True_Negative", 0 * Count,
+                      ifelse(Variable == "True_Positive", 2 * Count,
+                             ifelse(Variable == "False_Negative", 0 * Count,
+                                    ifelse(Variable == "False_Positive", (-1) * Count, 0)))),
+             Threshold = x)
+    
+    all_prediction <- rbind(all_prediction, this_prediction)
+    x <- x + .01
+  }
+  return(all_prediction)
+}
+
+whichThreshold <- iterateThresholds(testProbs)
+
+whichThreshold_revenue <- 
+  whichThreshold %>% 
+  group_by(Threshold) %>% 
+  summarize(Revenue = sum(Revenue))
+
+optimal_threshold <- whichThreshold_revenue %>% 
+  filter(Revenue == max(Revenue)) %>% 
+  pull(Threshold)
+
 results[[i]] <- list(
   sensitivity = sensitivity,
-  specificity = specificity
+  specificity = specificity,
+  optimal_threshold = optimal_threshold
 )
 
-cat("Iteration:", i, "AUC:", round(auc_value, 4), "Sensitivity:", round(sensitivity, 4),
+cat("Iteration:", i, "Optimal Threshold:", optimal_threshold, "Sensitivity:", round(sensitivity, 4),
     "Specificity:", round(specificity, 4), "\n")
 }
 
+avg_optimal_threshold <- mean(sapply(results, function(res) res$optimal_threshold[1]), na.rm = T)
 avg_sensitivity <- mean(sapply(results, function(res) res$sensitivity))
 avg_specificity <- mean(sapply(results, function(res) res$specificity))
 
-cat("Average Sensitivity over 30 runs:", round(avg_sensitivity, 4), "\n")
-cat("Average Specificity over 30 runs:", round(avg_specificity, 4), "\n")
+cat("Average Optimal Threshold over 100 runs:", avg_optimal_threshold, "\n")
+cat("Average Sensitivity over 100 runs:", round(avg_sensitivity, 4), "\n")
+cat("Average Specificity over 100 runs:", round(avg_specificity, 4), "\n")
 ```
+
