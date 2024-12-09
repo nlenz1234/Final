@@ -18,6 +18,7 @@ library(tidyverse)
 library(sf)
 library(gridExtra)
 library(caret)
+library(spdep)
 library(plotROC)
 library(pROC)
 ```
@@ -239,6 +240,13 @@ data <- data %>%
   mutate(OD_level = paste(from_level, to_level, sep = "/"))
 
 data <- data %>%
+  left_join(stations %>% select(code, Overall) %>% rename(from_passenger = Overall), 
+            by = c("from" = "code")) %>%
+  left_join(stations %>% select(code, Overall) %>% rename(to_passenger = Overall), 
+            by = c("to" = "code")) %>%
+  mutate(OD_passenger = log(from_passenger) * log(to_passenger))
+
+data <- data %>%
   mutate(time_period = case_when(
     hour >= 6 & hour <= 9  ~ "Morning",
     hour >= 10 & hour <= 15 ~ "Noon",
@@ -288,8 +296,8 @@ ggplot() +
 ```{r}
 data <- data %>%
   mutate(type = case_when(
-    type %in% c("ICE", "ICT", "ic") ~ "IC",        
-    type %in% c("THA", "TRN", "Extra") ~ "Other", 
+    type %in% c("ic") ~ "IC",        
+    type %in% c("ICT", "ICE", "THA", "TRN", "Extra") ~ "Other", 
     TRUE ~ type                                   
   ))
 
@@ -309,31 +317,214 @@ ggplot(train_type, aes(x = fct_reorder(type, avg, .desc = TRUE), y = avg)) +
 ```
 
 ```{r}
-data_model <- data %>% dplyr::select(occupancy_classifier, dotw, hour,
+schedules <- read.csv("OctSchedules.txt", header = F)
+freq <- read.csv("stations_freq.csv")
+schedules <- schedules %>% 
+  dplyr::select(V1, V9, V10, V14) %>% 
+  rename(date = V1, arrive_time = V9, depart_time = V10, station = V14) %>% 
+  mutate(time = ifelse(depart_time == "", arrive_time, depart_time)) %>%
+  dplyr::select(-depart_time, -arrive_time) %>%
+  mutate(
+    date = dmy(date),
+    datetime = as.POSIXct(paste(date, time), format = "%Y-%m-%d %H:%M:%S")
+  ) %>%
+  dplyr::select(-date, -time) %>%
+  left_join(freq %>% select(station, name), by = "station") %>% 
+  na.omit() %>% 
+  dplyr::select(-station) %>%
+  left_join(stations %>% select(name, code), by = "name") %>% 
+  dplyr::select(-name)
+
+start_date <- as.POSIXct("2016-10-23 00:00:00")
+
+data <- data %>%
+  mutate(
+    mapped_date = as.Date(start_date) + ((as.numeric(as.Date(datetime_combined) - as.Date(start_date))) %% 7),
+    mapped_datetime = as.POSIXct(paste(mapped_date, format(datetime_combined, "%H:%M:%S")), format = "%Y-%m-%d %H:%M:%S")
+  )
+
+data <- data %>%
+  rowwise() %>% 
+  # mutate(
+  #   freq_from = sum(
+  #     schedules$datetime >= (mapped_datetime - hours(1)) &  
+  #       schedules$datetime <= (mapped_datetime + hours(1)) &  
+  #       schedules$code == from                                    
+  #   ),
+  #   freq_to = sum(
+  #     schedules$datetime >= (mapped_datetime - hours(1)) &  
+  #       schedules$datetime <= (mapped_datetime + hours(1)) &  
+  #       schedules$code == to                                    
+  #   ),
+  #   freq = (freq_from + freq_to) / 2
+  # ) %>%
+  mutate(
+    freq_from = sum(
+      schedules$datetime >= (mapped_datetime - minutes(30)) &  
+        schedules$datetime <= (mapped_datetime + minutes(30)) &  
+        schedules$code == from                                    
+    ),
+    freq_to = sum(
+      schedules$datetime >= (mapped_datetime - minutes(30)) &  
+        schedules$datetime <= (mapped_datetime + minutes(30)) &  
+        schedules$code == to                                    
+    ),
+    freq = (freq_from + freq_to) / 2
+  ) %>%
+  ungroup() 
+
+```
+
+```{r}
+data_model <- data %>% dplyr::select(occupancy_classifier, datetime_combined, dotw, hour,
                                      time_period, day_time,
                                from_level, to_level, OD_level, type,
-                               Temperature, Precipitation) %>%
+                               Temperature, Precipitation, OD_passenger, from, to, freq) %>%
   mutate(dotw = as.character(dotw), hour = as.factor(hour))
 
-set.seed(111)
+set.seed(1000)
 trainIndex <- createDataPartition(data_model$occupancy_classifier, p = 0.7, list = FALSE, times = 1)
 
 dataTrain <- data_model[trainIndex, ]
 dataTest <- data_model[-trainIndex, ]
 
-model <- glm(occupancy_classifier ~ .,
-                  data = dataTrain %>% 
-                    dplyr::select(-time_period, -day_time, -OD_level),
-                  family="binomial" (link="logit"))
+# model <- glm(occupancy_classifier ~ .,
+#                   data = dataTrain %>% 
+#                     dplyr::select(-time_period, -day_time, -OD_level, -OD_passenger, -from, -to),
+#                   family="binomial" (link="logit"))
+# 
+# summary(model)
+# 
+# model2 <- glm(occupancy_classifier ~ .,
+#                   data = dataTrain %>% 
+#                     dplyr::select(-dotw, -hour, -time_period, -from_level, -to_level, -OD_passenger, -from, -to),
+#                   family="binomial" (link="logit"))
+# 
+# summary(model2)
+# 
+# model3 <- glm(occupancy_classifier ~ .,
+#                   data = dataTrain %>% 
+#                     dplyr::select(-dotw, -hour, -time_period, -from_level, -to_level, -OD_level, -Precipitation, -from, -to),
+#                   family="binomial" (link="logit"))
+# 
+# summary(model3)
+```
+
+```{r}
+from_sum <- dataTrain %>%
+  group_by(from) %>%
+  summarize(from_count = n(),
+            from_sum = sum(occupancy_classifier, na.rm = TRUE))
+
+to_sum <- dataTrain %>%
+  group_by(to) %>%
+  summarize(to_count = n(),
+            to_sum = sum(occupancy_classifier, na.rm = TRUE))
+
+stations_train <- stations_sf[,c(1,12)] %>%
+  left_join(from_sum, by = c("code" = "from")) %>%
+  left_join(to_sum, by = c("code" = "to")) %>%
+  replace(is.na(.), 0) %>%
+  mutate(overall_count = from_count + to_count,
+         overall_sum = from_sum + to_sum)
+
+coords <- st_coordinates(stations_train)
+
+knn_nb <- knn2nb(knearneigh(coords, k = 5))
+
+neighbor_results <- lapply(1:length(knn_nb), function(i) {
+  neighbors <- knn_nb[[i]]
+  
+  overall_count_sum <- sum(stations_train$overall_count[neighbors], na.rm = TRUE)
+  overall_sum_sum <- sum(stations_train$overall_sum[neighbors], na.rm = TRUE)
+  
+  return(data.frame(overall_count_sum = overall_count_sum, overall_sum_sum = overall_sum_sum))
+})
+
+neighbor_results_df <- do.call(rbind, neighbor_results)
+
+stations_train <- stations_train %>%
+  bind_cols(neighbor_results_df) %>%
+  mutate(neighbor = overall_sum_sum / overall_count_sum) %>% 
+  st_drop_geometry()
+
+dataTrain <- dataTrain %>%
+  left_join(stations_train %>% select(code, neighbor) %>% rename(from_neighbor = neighbor), 
+            by = c("from" = "code")) %>%
+  left_join(stations_train %>% select(code, neighbor) %>% rename(to_neighbor = neighbor), 
+            by = c("to" = "code")) %>%
+  mutate(OD_neighbor = (from_neighbor + to_neighbor)/2) 
+
+# model4 <- glm(occupancy_classifier ~ .,
+#                   data = dataTrain %>% 
+#                     dplyr::select(-dotw, -hour, -time_period, -from_level, -to_level, -OD_level, -Precipitation, -from, -to, -from_neighbor, -to_neighbor),
+#                   family="binomial" (link="logit"))
+# 
+# summary(model4)
+```
+
+```{r}
+dataTrain <- dataTrain %>%
+  mutate(
+    mapped_date = as.Date(start_date) + ((as.numeric(as.Date(datetime_combined) - as.Date(start_date))) %% 7),
+    mapped_datetime = as.POSIXct(paste(mapped_date, format(datetime_combined, "%H:%M:%S")), format = "%Y-%m-%d %H:%M:%S")
+  )
+
+datetime <- dataTrain %>%
+  dplyr::select(occupancy_classifier, datetime_combined, mapped_datetime) %>%
+  arrange(mapped_datetime) %>%  
+  slice(1:20) %>%
+  mutate(mapped_datetime = mapped_datetime + days(7)) %>%
+  bind_rows(
+    dataTrain %>%
+      dplyr::select(occupancy_classifier, datetime_combined, mapped_datetime) %>%
+      arrange(mapped_datetime) %>%
+      slice((n() - 19):n()) %>%
+      mutate(mapped_datetime = mapped_datetime - days(7))
+  ) %>%
+  bind_rows(dataTrain %>%
+              dplyr::select(occupancy_classifier, datetime_combined, mapped_datetime))
+
+datetime <- datetime %>%
+  arrange(mapped_datetime)
+
+dataTrain <- dataTrain %>%
+  mutate(
+    rolling_avg = map_dbl(1:n(), function(i) {
+      distances <- abs(as.numeric(datetime$mapped_datetime - mapped_datetime[i]))
+      nearest_indices <- order(distances)[1:20]
+      mean(datetime$occupancy_classifier[nearest_indices], na.rm = TRUE)
+    })
+  )
+
+model <- glm(occupancy_classifier ~ type + Temperature + OD_passenger + OD_neighbor + rolling_avg + freq,
+                  data = dataTrain, family="binomial" (link="logit"))
 
 summary(model)
+```
 
-model2 <- glm(occupancy_classifier ~ .,
-                  data = dataTrain %>% 
-                    dplyr::select(-dotw, -hour, -time_period, -from_level, -to_level),
-                  family="binomial" (link="logit"))
+```{r}
+dataTest <- dataTest %>%
+  left_join(stations_train %>% select(code, neighbor) %>% rename(from_neighbor = neighbor), 
+            by = c("from" = "code")) %>%
+  left_join(stations_train %>% select(code, neighbor) %>% rename(to_neighbor = neighbor), 
+            by = c("to" = "code")) %>%
+  mutate(OD_neighbor = (from_neighbor + to_neighbor)/2)
 
-summary(model2)
+dataTest <- dataTest %>%
+  mutate(
+    mapped_date = as.Date(start_date) + ((as.numeric(as.Date(datetime_combined) - as.Date(start_date))) %% 7),
+    mapped_datetime = as.POSIXct(paste(mapped_date, format(datetime_combined, "%H:%M:%S")), format = "%Y-%m-%d %H:%M:%S")
+  )
+
+dataTest <- dataTest %>%
+  mutate(
+    rolling_avg = map_dbl(1:n(), function(i) {
+      distances <- abs(as.numeric(datetime$mapped_datetime - mapped_datetime[i]))
+      nearest_indices <- order(distances)[1:20]
+      mean(datetime$occupancy_classifier[nearest_indices], na.rm = TRUE)
+    })
+  )
 ```
 
 ```{r}
@@ -353,19 +544,19 @@ ggplot(testProbs, aes(d = as.numeric(Outcome), m = Probs)) +
 ```
 
 ```{r}
-testProbs2 <- data.frame(Outcome = as.factor(dataTest$occupancy_classifier),
-                        Probs = predict(model2, dataTest, type= "response"))
-
-auc_value <- auc(testProbs2$Outcome, testProbs2$Probs)
-
-ggplot(testProbs2, aes(d = as.numeric(Outcome), m = Probs)) +
-  geom_roc(n.cuts = 50, labels = FALSE, colour = "#FE9900") +
-  style_roc(theme = theme_grey) +
-  geom_abline(slope = 1, intercept = 0, size = 1, color = 'grey') +
-  geom_text(aes(x = 0, y = 0.9, label = paste("ROC:", round(auc_value, 4))), 
-            colour = "black", size = 4, hjust = 0) +
-  labs(title = "ROC Curve: Engineered Model") +
-  theme(plot.caption = element_text(hjust = 0))
+# testProbs2 <- data.frame(Outcome = as.factor(dataTest$occupancy_classifier),
+#                         Probs = predict(model8, dataTest, type= "response"))
+# 
+# auc_value <- auc(testProbs2$Outcome, testProbs2$Probs)
+# 
+# ggplot(testProbs2, aes(d = as.numeric(Outcome), m = Probs)) +
+#   geom_roc(n.cuts = 50, labels = FALSE, colour = "#FE9900") +
+#   style_roc(theme = theme_grey) +
+#   geom_abline(slope = 1, intercept = 0, size = 1, color = 'grey') +
+#   geom_text(aes(x = 0, y = 0.9, label = paste("ROC:", round(auc_value, 4))), 
+#             colour = "black", size = 4, hjust = 0) +
+#   labs(title = "ROC Curve: Engineered Model") +
+#   theme(plot.caption = element_text(hjust = 0))
 ```
 
 ```{r}
@@ -388,7 +579,145 @@ confusion_matrix <- confusionMatrix(testProbs$Predicted, testProbs$Outcome, posi
 
 print(confusion_matrix)
 
-testProbs2 <- testProbs2 %>%
+# testProbs2 <- testProbs2 %>%
+#   mutate(
+#     Predicted = ifelse(Probs >= threshold, "High", "Low"),
+#     Predicted = factor(Predicted, levels = c("Low", "High")), 
+#     Outcome = dataTest_factor$occupancy_classifier
+#   )
+# 
+# 
+# confusion_matrix <- confusionMatrix(testProbs2$Predicted, testProbs2$Outcome, positive = "High")
+# 
+# print(confusion_matrix)
+```
+
+```{r}
+results <- list()
+
+for (i in 1:100) {
+  
+set.seed(312+i)
+trainIndex <- createDataPartition(data_model$occupancy_classifier, p = 0.7, list = FALSE, times = 1)
+
+dataTrain <- data_model[trainIndex, ]
+dataTest <- data_model[-trainIndex, ]
+
+from_sum <- dataTrain %>%
+  group_by(from) %>%
+  summarize(from_count = n(),
+            from_sum = sum(occupancy_classifier, na.rm = TRUE))
+
+to_sum <- dataTrain %>%
+  group_by(to) %>%
+  summarize(to_count = n(),
+            to_sum = sum(occupancy_classifier, na.rm = TRUE))
+
+stations_train <- stations_sf[,c(1,12)] %>%
+  left_join(from_sum, by = c("code" = "from")) %>%
+  left_join(to_sum, by = c("code" = "to")) %>%
+  replace(is.na(.), 0) %>%
+  mutate(overall_count = from_count + to_count,
+         overall_sum = from_sum + to_sum)
+
+coords <- st_coordinates(stations_train)
+
+knn_nb <- knn2nb(knearneigh(coords, k = 5))
+
+neighbor_results <- lapply(1:length(knn_nb), function(i) {
+  neighbors <- knn_nb[[i]]
+  
+  overall_count_sum <- sum(stations_train$overall_count[neighbors], na.rm = TRUE)
+  overall_sum_sum <- sum(stations_train$overall_sum[neighbors], na.rm = TRUE)
+  
+  return(data.frame(overall_count_sum = overall_count_sum, overall_sum_sum = overall_sum_sum))
+})
+
+neighbor_results_df <- do.call(rbind, neighbor_results)
+
+stations_train <- stations_train %>%
+  bind_cols(neighbor_results_df) %>%
+  mutate(neighbor = overall_sum_sum / overall_count_sum) %>% 
+  st_drop_geometry()
+
+dataTrain <- dataTrain %>%
+  left_join(stations_train %>% select(code, neighbor) %>% rename(from_neighbor = neighbor), 
+            by = c("from" = "code")) %>%
+  left_join(stations_train %>% select(code, neighbor) %>% rename(to_neighbor = neighbor), 
+            by = c("to" = "code")) %>%
+  mutate(OD_neighbor = (from_neighbor + to_neighbor)/2) 
+
+dataTrain <- dataTrain %>%
+  mutate(
+    mapped_date = as.Date(start_date) + ((as.numeric(as.Date(datetime_combined) - as.Date(start_date))) %% 7),
+    mapped_datetime = as.POSIXct(paste(mapped_date, format(datetime_combined, "%H:%M:%S")), format = "%Y-%m-%d %H:%M:%S")
+  )
+
+datetime <- dataTrain %>%
+  dplyr::select(occupancy_classifier, datetime_combined, mapped_datetime) %>%
+  arrange(mapped_datetime) %>%  
+  slice(1:20) %>%
+  mutate(mapped_datetime = mapped_datetime + days(7)) %>%
+  bind_rows(
+    dataTrain %>%
+      dplyr::select(occupancy_classifier, datetime_combined, mapped_datetime) %>%
+      arrange(mapped_datetime) %>%
+      slice((n() - 19):n()) %>%
+      mutate(mapped_datetime = mapped_datetime - days(7))
+  ) %>%
+  bind_rows(dataTrain %>%
+              dplyr::select(occupancy_classifier, datetime_combined, mapped_datetime))
+
+datetime <- datetime %>%
+  arrange(mapped_datetime)
+
+dataTrain <- dataTrain %>%
+  mutate(
+    rolling_avg = map_dbl(1:n(), function(i) {
+      distances <- abs(as.numeric(datetime$mapped_datetime - mapped_datetime[i]))
+      nearest_indices <- order(distances)[1:20]
+      mean(datetime$occupancy_classifier[nearest_indices], na.rm = TRUE)
+    })
+  )
+
+model <- glm(occupancy_classifier ~ type + Temperature + OD_passenger + OD_neighbor + rolling_avg + freq,
+             data = dataTrain, family="binomial" (link="logit"))
+
+dataTest <- dataTest %>%
+  left_join(stations_train %>% select(code, neighbor) %>% rename(from_neighbor = neighbor), 
+            by = c("from" = "code")) %>%
+  left_join(stations_train %>% select(code, neighbor) %>% rename(to_neighbor = neighbor), 
+            by = c("to" = "code")) %>%
+  mutate(OD_neighbor = (from_neighbor + to_neighbor)/2)
+
+dataTest <- dataTest %>%
+  mutate(
+    mapped_date = as.Date(start_date) + ((as.numeric(as.Date(datetime_combined) - as.Date(start_date))) %% 7),
+    mapped_datetime = as.POSIXct(paste(mapped_date, format(datetime_combined, "%H:%M:%S")), format = "%Y-%m-%d %H:%M:%S")
+  )
+
+dataTest <- dataTest %>%
+  mutate(
+    rolling_avg = map_dbl(1:n(), function(i) {
+      distances <- abs(as.numeric(datetime$mapped_datetime - mapped_datetime[i]))
+      nearest_indices <- order(distances)[1:20]
+      mean(datetime$occupancy_classifier[nearest_indices], na.rm = TRUE)
+    })
+  )
+
+testProbs <- data.frame(Outcome = as.factor(dataTest$occupancy_classifier),
+                        Probs = predict(model, dataTest, type= "response"))
+
+auc_value <- auc(testProbs$Outcome, testProbs$Probs)
+
+threshold <- 0.4  
+
+dataTest_factor <- dataTest %>%
+  mutate(occupancy_classifier = factor(occupancy_classifier, 
+                                       levels = c(0, 1), 
+                                       labels = c("Low", "High")))
+
+testProbs <- testProbs %>%
   mutate(
     Predicted = ifelse(Probs >= threshold, "High", "Low"),
     Predicted = factor(Predicted, levels = c("Low", "High")), 
@@ -396,7 +725,23 @@ testProbs2 <- testProbs2 %>%
   )
 
 
-confusion_matrix <- confusionMatrix(testProbs2$Predicted, testProbs2$Outcome, positive = "High")
+confusion_matrix <- confusionMatrix(testProbs$Predicted, testProbs$Outcome, positive = "High")
 
-print(confusion_matrix)
+sensitivity <- confusion_matrix$byClass["Sensitivity"]
+specificity <- confusion_matrix$byClass["Specificity"]
+
+results[[i]] <- list(
+  sensitivity = sensitivity,
+  specificity = specificity
+)
+
+cat("Iteration:", i, "AUC:", round(auc_value, 4), "Sensitivity:", round(sensitivity, 4),
+    "Specificity:", round(specificity, 4), "\n")
+}
+
+avg_sensitivity <- mean(sapply(results, function(res) res$sensitivity))
+avg_specificity <- mean(sapply(results, function(res) res$specificity))
+
+cat("Average Sensitivity over 30 runs:", round(avg_sensitivity, 4), "\n")
+cat("Average Specificity over 30 runs:", round(avg_specificity, 4), "\n")
 ```
