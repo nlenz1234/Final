@@ -241,7 +241,7 @@ data_occupancy <- data %>%
 ggplot(data_occupancy %>% filter(count > 4),
        aes(x = dotw, y = hour, fill = high_occupancy_rate)) +
   geom_tile() +
-  scale_fill_gradient(low = "white", high = "red") +
+  scale_fill_gradient(low = "white", high = "firebrick") +
   labs(
     title = "High Occupancy Rate Across the Week",
     x = "Day of the Week",
@@ -366,7 +366,7 @@ grid.arrange(
     ggplot(weather.Panel, aes(date, Temperature)) + geom_line() +
       labs(title = "Temperature", x = "Day", y = "Temperature") + theme_minimal(),
     ggplot(weather.Panel, aes(date, Precipitation)) + geom_line() +
-      labs(title = "Percipitation", x = "Day", y = "Precipitation") + theme_minimal(),
+      labs(title = "Precipitation", x = "Day", y = "Precipitation") + theme_minimal(),
     ncol = 2,
     nrow = 2
   ),
@@ -539,7 +539,7 @@ datetime <- datetime %>%
   arrange(mapped_datetime)
 
 dataTrain <- dataTrain %>%
-  mutate(Adjacant = map_dbl(1:n(), function(i) {
+  mutate(Adjacent = map_dbl(1:n(), function(i) {
     distances <- abs(as.numeric(datetime$mapped_datetime - mapped_datetime[i]))
     nearest_indices <- order(distances)[1:20]
     mean(datetime$occupancy_classifier[nearest_indices], na.rm = TRUE)
@@ -548,7 +548,7 @@ dataTrain <- dataTrain %>%
 
 ```{r model}
 model <- glm(
-  occupancy_classifier ~ type + Temperature + OD_passenger + Frequency + OD_neighbor + Adjacant,
+  occupancy_classifier ~ type + Temperature + OD_passenger + Frequency + OD_neighbor + Adjacent,
   data = dataTrain,
   family = "binomial" (link = "logit")
 )
@@ -582,7 +582,7 @@ descriptions <- tibble(
     "OD_passenger",
     "Frequency",
     "OD_neighbor",
-    "Adjacant"
+    "Adjacent"
   ),
   Description = c(
     "",
@@ -593,7 +593,7 @@ descriptions <- tibble(
     "The average temperature in Brussels on the day. Sourced from Weather and Climate.",
     "The product of the logarithm of average daily passenger flow at origin and destination stations. Computed using passenger count data from SNCB (2023).",
     "The average number of trains passing through the origin and destination stations within 30 minutes before and after the train's travel time. Computed using punctuality data from Open Data Wallonie-Bruxelles.",
-    "The average High Occupancy Rate of the five nearest stations of the origin and destination (included) stations. Computed using station location information extracted from the original dataset.",
+    "The average High Occupancy Rate of the five nearest stations of the origin and destination (included) stations. Computed using station location information extracted from the stations dataset.",
     "The High Occupancy Rate of the 20 trains closest in time to the train's travel time, within a week-integrated dataset. Computed using time information extracted from the original dataset."
   )
 )
@@ -630,7 +630,7 @@ dataTest <- dataTest %>%
   )
 
 dataTest <- dataTest %>%
-  mutate(Adjacant = map_dbl(1:n(), function(i) {
+  mutate(Adjacent = map_dbl(1:n(), function(i) {
     distances <- abs(as.numeric(datetime$mapped_datetime - mapped_datetime[i]))
     nearest_indices <- order(distances)[1:20]
     mean(datetime$occupancy_classifier[nearest_indices], na.rm = TRUE)
@@ -883,14 +883,14 @@ for (i in 1:100) {
     arrange(mapped_datetime)
   
   dataTrain <- dataTrain %>%
-    mutate(Adjacant = map_dbl(1:n(), function(i) {
+    mutate(Adjacent = map_dbl(1:n(), function(i) {
       distances <- abs(as.numeric(datetime$mapped_datetime - mapped_datetime[i]))
       nearest_indices <- order(distances)[1:20]
       mean(datetime$occupancy_classifier[nearest_indices], na.rm = TRUE)
     }))
   
   model <- glm(
-    occupancy_classifier ~ type + Temperature + OD_passenger + Frequency + OD_neighbor + Adjacant,
+    occupancy_classifier ~ type + Temperature + OD_passenger + Frequency + OD_neighbor + Adjacent,
     data = dataTrain,
     family = "binomial" (link = "logit")
   )
@@ -917,7 +917,7 @@ for (i in 1:100) {
     )
   
   dataTest <- dataTest %>%
-    mutate(Adjacant = map_dbl(1:n(), function(i) {
+    mutate(Adjacent = map_dbl(1:n(), function(i) {
       distances <- abs(as.numeric(datetime$mapped_datetime - mapped_datetime[i]))
       nearest_indices <- order(distances)[1:20]
       mean(datetime$occupancy_classifier[nearest_indices], na.rm = TRUE)
@@ -1096,14 +1096,14 @@ for (i in 1:100) {
     arrange(mapped_datetime)
   
   dataTrain <- dataTrain %>%
-    mutate(Adjacant = map_dbl(1:n(), function(i) {
+    mutate(Adjacent = map_dbl(1:n(), function(i) {
       distances <- abs(as.numeric(datetime$mapped_datetime - mapped_datetime[i]))
       nearest_indices <- order(distances)[1:20]
       mean(datetime$occupancy_classifier[nearest_indices], na.rm = TRUE)
     }))
   
   model <- glm(
-    occupancy_classifier ~ type + Temperature + OD_passenger + Frequency + OD_neighbor + Adjacant,
+    occupancy_classifier ~ type + Temperature + OD_passenger + Frequency + OD_neighbor + Adjacent,
     data = dataTrain,
     family = "binomial" (link = "logit")
   )
@@ -1130,7 +1130,7 @@ for (i in 1:100) {
     )
   
   dataTest <- dataTest %>%
-    mutate(Adjacant = map_dbl(1:n(), function(i) {
+    mutate(Adjacent = map_dbl(1:n(), function(i) {
       distances <- abs(as.numeric(datetime$mapped_datetime - mapped_datetime[i]))
       nearest_indices <- order(distances)[1:20]
       mean(datetime$occupancy_classifier[nearest_indices], na.rm = TRUE)
