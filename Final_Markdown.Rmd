@@ -667,7 +667,7 @@ ggplot(testProbs, aes(d = as.numeric(Outcome), m = Probs)) +
     aes(
       x = 0,
       y = 0.9,
-      label = paste("ROC:", round(auc_value, 4))
+      label = paste("AUC:", round(auc_value, 4))
     ),
     colour = "black",
     size = 4,
