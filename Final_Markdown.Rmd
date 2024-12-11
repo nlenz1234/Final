@@ -677,6 +677,36 @@ ggplot(testProbs, aes(d = as.numeric(Outcome), m = Probs)) +
   theme(plot.caption = element_text(size = 10, face = "italic", hjust = 0))
 ```
 
+```{r cost benefit}
+confusion_matrix_table <- data.frame(
+  "Condition" = c(
+    "True Positive",
+    "False Positive",
+    "True Negative",
+    "False Negative"
+  ),
+  "Description" = c(
+    "Predicted overcrowded and train is overcrowded",
+    "Predicted overcrowded and train is not overcrowded",
+    "Predicted not overcrowded and train is not overcrowded",
+    "Predicted not overcrowded but train is overcrowded"
+  ),
+  "Utility" = c(
+    "2: Discomfort and delay avoided by optimization",
+    "-1: Cost of sending additional trains out",
+    "0",
+    "0"
+  )
+)
+
+kable(
+  confusion_matrix_table,
+  format = "markdown",
+  col.names = c("Condition", "Description", "Utility"),
+  caption = "Table 2: Cost-Benefit Analysis"
+)
+```
+
 ```{r threshold}
 iterateThresholds <- function(data) {
   x = .01
@@ -756,7 +786,6 @@ ggplot(whichThreshold_utility) +
        caption = "Figure 9") +
   theme(plot.caption = element_text(size = 10, face = "italic", hjust = 0))
 ```
-
 
 ```{r confusion matrix, include=TRUE}
 threshold <- optimal_threshold
