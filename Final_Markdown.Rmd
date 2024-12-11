@@ -591,7 +591,7 @@ descriptions <- tibble(
     "",
     "",
     "The average temperature in Brussels on the day. Sourced from Weather and Climate.",
-    "The product of the logarithm of average daily passenger flow at origin and destination stations. Computed using passenger count data from SNCB (2016).",
+    "The product of the logarithm of average daily passenger flow at origin and destination stations. Computed using passenger count data from SNCB (2023).",
     "The average number of trains passing through the origin and destination stations within 30 minutes before and after the train's travel time. Computed using punctuality data from Open Data Wallonie-Bruxelles.",
     "The average High Occupancy Rate of the five nearest stations of the origin and destination (included) stations. Computed using station location information extracted from the original dataset.",
     "The High Occupancy Rate of the 20 trains closest in time to the train's travel time, within a week-integrated dataset. Computed using time information extracted from the original dataset."
@@ -954,7 +954,7 @@ for (i in 1:100) {
         ) %>%
         gather(Variable, Count) %>%
         mutate(
-          Revenue =
+          Utility =
             ifelse(
               Variable == "True_Negative",
               0 * Count,
@@ -979,13 +979,13 @@ for (i in 1:100) {
   
   whichThreshold <- iterateThresholds(testProbs)
   
-  whichThreshold_revenue <-
+  whichThreshold_utility <-
     whichThreshold %>%
     group_by(Threshold) %>%
-    summarize(Revenue = sum(Revenue))
+    summarize(Utility = sum(Utility))
   
-  optimal_threshold <- whichThreshold_revenue %>%
-    filter(Revenue == max(Revenue)) %>%
+  optimal_threshold <- whichThreshold_utility %>%
+    filter(Utility == max(Utility)) %>%
     pull(Threshold)
   
   thresholds[[i]] <- list(optimal_threshold = optimal_threshold)

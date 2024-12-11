@@ -984,7 +984,7 @@ descriptions &lt;- tibble(
     &quot;&quot;,
     &quot;&quot;,
     &quot;The average temperature in Brussels on the day. Sourced from Weather and Climate.&quot;,
-    &quot;The product of the logarithm of average daily passenger flow at origin and destination stations. Computed using passenger count data from SNCB (2016).&quot;,
+    &quot;The product of the logarithm of average daily passenger flow at origin and destination stations. Computed using passenger count data from SNCB (2023).&quot;,
     &quot;The average number of trains passing through the origin and destination stations within 30 minutes before and after the train&#39;s travel time. Computed using punctuality data from Open Data Wallonie-Bruxelles.&quot;,
     &quot;The average High Occupancy Rate of the five nearest stations of the origin and destination (included) stations. Computed using station location information extracted from the original dataset.&quot;,
     &quot;The High Occupancy Rate of the 20 trains closest in time to the train&#39;s travel time, within a week-integrated dataset. Computed using time information extracted from the original dataset.&quot;
@@ -1069,7 +1069,7 @@ from Weather and Climate.</td>
 <td align="left">***</td>
 <td align="left">The product of the logarithm of average daily passenger
 flow at origin and destination stations. Computed using passenger count
-data from SNCB (2016).</td>
+data from SNCB (2023).</td>
 </tr>
 <tr class="even">
 <td align="left">Frequency</td>
@@ -1439,7 +1439,7 @@ for (i in 1:100) {
         ) %&gt;%
         gather(Variable, Count) %&gt;%
         mutate(
-          Revenue =
+          Utility =
             ifelse(
               Variable == &quot;True_Negative&quot;,
               0 * Count,
@@ -1464,13 +1464,13 @@ for (i in 1:100) {
   
   whichThreshold &lt;- iterateThresholds(testProbs)
   
-  whichThreshold_revenue &lt;-
+  whichThreshold_utility &lt;-
     whichThreshold %&gt;%
     group_by(Threshold) %&gt;%
-    summarize(Revenue = sum(Revenue))
+    summarize(Utility = sum(Utility))
   
-  optimal_threshold &lt;- whichThreshold_revenue %&gt;%
-    filter(Revenue == max(Revenue)) %&gt;%
+  optimal_threshold &lt;- whichThreshold_utility %&gt;%
+    filter(Utility == max(Utility)) %&gt;%
     pull(Threshold)
   
   thresholds[[i]] &lt;- list(optimal_threshold = optimal_threshold)
