@@ -1,0 +1,1236 @@
+---
+title: "Final Project"
+author: "Guangze Sun & Nick Lenz"
+date: "2024-12-10"
+output:
+  html_document:
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(message = FALSE, warning = FALSE)
+Sys.setlocale("LC_TIME", "C")
+```
+
+```{r package}
+library(tidyverse)
+library(sf)
+library(gridExtra)
+library(grid)
+library(caret)
+library(spdep)
+library(plotROC)
+library(pROC)
+library(broom)
+library(knitr)
+```
+
+```{r read data}
+data <- read.csv('trains_train.csv') %>%
+  filter(!(to %in% c("000000000", "(null)"))) %>%
+  filter(!(from %in% c("(null)"))) %>%
+  mutate(
+    OD = paste(from, to, sep = "/"),
+    type = ifelse(
+      str_detect(vehicle, "[A-Za-z]"),
+      str_extract(vehicle, "^[A-Za-z]+"),
+      "Extra"
+    ),
+    occupancy_classifier = case_when(occupancy == "high" ~ 1, TRUE ~ 0)
+  ) %>%
+  dplyr::select(-connection, -occupancy, -vehicle)
+```
+
+```{r temporal}
+data <- data %>%
+  mutate(
+    time_24hr = format(parse_date_time(trimws(time), orders = "HMS p"), "%H:%M:%S"),
+    datetime_combined = ymd(date) + hms(time_24hr),
+    interval60 = floor_date(datetime_combined, "hour"),
+    #interval30 = floor_date(datetime_combined, "30 minutes"),
+    hour = hour(interval60),
+    #minute = minute(interval30),
+    #halfhour = hour + ifelse(minute >= 30, 0.5, 0),
+    dotw = wday(interval60, label = TRUE),
+    # is_weekend = ifelse(dotw %in% c("Sat", "Sun"), "Weekend", "Weekday"),
+    date = ymd(date)
+  )
+```
+
+```{r spatial}
+stations <- read.csv('stations.csv') %>%
+  mutate(
+    code = str_extract(URI, "[^/]{9}$"),
+    Weekday = as.numeric(Weekday),
+    Weekend = rowMeans(cbind(
+      as.numeric(Saturday), as.numeric(Sunday)
+    ), na.rm = TRUE)
+  ) %>%
+  filter(country.code == "be") %>%
+  select(code, name, longitude, latitude, Weekday, Weekend) %>%
+  filter(code %in% unique(c(data$from, data$to)))
+
+from_avg <- data %>%
+  group_by(from) %>%
+  summarize(from_count = n(),
+            from_avg = mean(occupancy_classifier, na.rm = TRUE))
+
+to_avg <- data %>%
+  group_by(to) %>%
+  summarize(to_count = n(),
+            to_avg = mean(occupancy_classifier, na.rm = TRUE))
+
+stations <- stations %>%
+  mutate(Overall = Weekday * 5 / 7 + Weekend * 2 / 7) %>%
+  left_join(from_avg, by = c("code" = "from")) %>%
+  left_join(to_avg, by = c("code" = "to")) %>%
+  replace(is.na(.), 0) %>%
+  mutate(
+    overall_count = from_count + to_count,
+    overall_avg = (from_avg * from_count + to_avg * to_count) / (from_count + to_count)
+  )
+
+stations_sf <- stations %>%
+  st_as_sf(coords = c("longitude", "latitude"), crs = 4326)
+
+# stations <- stations %>%
+#   mutate(level = case_when(
+#     Overall > 10000 ~ "A",
+#     Overall > 1000 & Overall <= 10000 ~ "B",
+#     Overall <= 1000 ~ "C"
+#   ))
+
+data <- data %>%
+  filter(from %in% stations$code & to %in% stations$code)
+# %>% left_join(stations %>% select(code, level) %>% rename(from_level = level),
+#             by = c("from" = "code")) %>%
+#     left_join(stations %>% select(code, level) %>% rename(to_level = level),
+#             by = c("to" = "code")) %>%
+#     mutate(OD_level = paste(from_level, to_level, sep = "/"))
+
+data <- data %>%
+  left_join(
+    stations %>% select(code, Overall) %>% rename(from_passenger = Overall),
+    by = c("from" = "code")
+  ) %>%
+  left_join(
+    stations %>% select(code, Overall) %>% rename(to_passenger = Overall),
+    by = c("to" = "code")
+  ) %>%
+  mutate(OD_passenger = log(from_passenger) * log(to_passenger))
+```
+
+```{r frequency}
+schedules <- read.csv("OctSchedules.txt", header = F)
+freq <- read.csv("stations_freq.csv")
+schedules <- schedules %>%
+  dplyr::select(V1, V9, V10, V14) %>%
+  rename(
+    date = V1,
+    arrive_time = V9,
+    depart_time = V10,
+    station = V14
+  ) %>%
+  mutate(time = ifelse(depart_time == "", arrive_time, depart_time)) %>%
+  dplyr::select(-depart_time, -arrive_time) %>%
+  mutate(date = dmy(date),
+         datetime = as.POSIXct(paste(date, time), format = "%Y-%m-%d %H:%M:%S")) %>%
+  dplyr::select(-date, -time) %>%
+  left_join(freq %>% select(station, name), by = "station") %>%
+  na.omit() %>%
+  dplyr::select(-station) %>%
+  left_join(stations %>% select(name, code), by = "name") %>%
+  dplyr::select(-name)
+
+start_date <- as.POSIXct("2016-10-23 00:00:00")
+
+data <- data %>%
+  mutate(
+    mapped_date = as.Date(start_date) + ((as.numeric(
+      as.Date(datetime_combined) - as.Date(start_date)
+    )) %% 7),
+    mapped_datetime = as.POSIXct(paste(
+      mapped_date, format(datetime_combined, "%H:%M:%S")
+    ), format = "%Y-%m-%d %H:%M:%S")
+  )
+
+data <- data %>%
+  rowwise() %>%
+  # mutate(
+  #   freq_from = sum(
+  #     schedules$datetime >= (mapped_datetime - hours(1)) &
+  #       schedules$datetime <= (mapped_datetime + hours(1)) &
+  #       schedules$code == from
+  #   ),
+  #   freq_to = sum(
+  #     schedules$datetime >= (mapped_datetime - hours(1)) &
+  #       schedules$datetime <= (mapped_datetime + hours(1)) &
+  #       schedules$code == to
+  #   ),
+  #   freq = (freq_from + freq_to) / 2
+  # ) %>%
+  mutate(
+    freq_from = sum(
+      schedules$datetime >= (mapped_datetime - minutes(30)) &
+        schedules$datetime <= (mapped_datetime + minutes(30)) &
+        schedules$code == from
+    ),
+    freq_to = sum(
+      schedules$datetime >= (mapped_datetime - minutes(30)) &
+        schedules$datetime <= (mapped_datetime + minutes(30)) &
+        schedules$code == to
+    ),
+    Frequency = (freq_from + freq_to) / 2
+  ) %>%
+  ungroup()
+```
+
+```{r type}
+data <- data %>%
+  mutate(type = case_when(
+    type %in% c("ic") ~ "IC",
+    type %in% c("ICT", "ICE", "THA", "TRN", "Extra") ~ "Other",
+    TRUE ~ type
+  ))
+```
+
+```{r weather}
+weather <- read.csv('weather.csv')
+
+weather <- weather %>%
+  mutate(date = ymd(Time), month_day = format(date, "%m-%d"))
+
+data <- data %>%
+  mutate(month_day = format(date, "%m-%d")) %>%
+  left_join(weather %>% select(month_day, Temperature, Precipitation), by = "month_day")
+```
+
+```{r EDA occupancy}
+occupancy.Panel <- data %>%
+  group_by(date) %>%
+  summarize(count = n(),
+            high_occupancy_rate = mean(occupancy_classifier))
+
+grid.arrange(
+  arrangeGrob(
+    ggplot(occupancy.Panel, aes(date, count)) + geom_line() +
+      labs(title = "Count", x = "Date", y = "Count") + theme_minimal(),
+    ggplot(occupancy.Panel, aes(date, high_occupancy_rate)) + geom_line() +
+      labs(title = "High Occupancy Rate", x = "Date", y = "High Occupancy Rate") + theme_minimal(),
+    ncol = 1
+  ),
+  bottom = textGrob(
+    "Figure 1",
+    x = 0.1,
+    gp = gpar(fontsize = 10, fontface = "italic")
+  )
+)
+```
+
+```{r EDA temporal}
+occupancy.Table <- data %>%
+  group_by(dotw, hour) %>%
+  summarize(
+    count = n(),
+    high_occupancy_rate = mean(occupancy_classifier, na.rm = TRUE)
+  )
+
+data_occupancy <- data %>%
+  left_join(occupancy.Table, by = c("dotw", "hour"))
+
+ggplot(data_occupancy %>% filter(count > 4),
+       aes(x = dotw, y = hour, fill = high_occupancy_rate)) +
+  geom_tile() +
+  scale_fill_gradient(low = "white", high = "red") +
+  labs(
+    title = "High Occupancy Rate Across the Week",
+    x = "Day of the Week",
+    y = "Hour of the Day",
+    fill = "High Occupancy Rate",
+    caption = "Figure 2"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.caption = element_text(size = 10, face = "italic", hjust = 0)
+  ) +
+  scale_y_reverse()
+```
+
+```{r EDA spatial}
+be <- st_read("be.shp", quiet = TRUE) %>% st_transform(crs = 4326)
+
+ggplot(data = stations_sf %>% filter(!is.na(overall_avg))) +
+  geom_sf(data = be,
+          color = "white",
+          alpha = 0.8) +
+  geom_sf(aes(color = to_avg), size = 2) +
+  scale_color_gradient(low = "grey80", high = "firebrick") +
+  theme_minimal() +
+  labs(
+    title = "High Occupancy Rate by Station",
+    color = "High Occupancy Rate",
+    x = "Longitude",
+    y = "Latitude",
+    caption = "Figure 3"
+  ) +
+  theme(plot.caption = element_text(size = 10, face = "italic", hjust = 0))
+
+od_data <- data %>%
+  group_by(OD) %>%
+  #filter(n() > 3) %>%
+  summarize(
+    count = n(),
+    high_occupancy_rate = mean(occupancy_classifier, na.rm = TRUE),
+    from = first(from),
+    to = first(to)
+  )
+
+od_with_coords <- od_data %>%
+  left_join(stations, by = c("from" = "code")) %>%
+  rename(from_long = longitude, from_lat = latitude) %>%
+  left_join(stations, by = c("to" = "code")) %>%
+  rename(to_long = longitude, to_lat = latitude)
+
+od_lines <- od_with_coords %>%
+  filter(!is.na(from_long) & !is.na(to_long)) %>%
+  rowwise() %>%
+  mutate(geometry = st_sfc(st_linestring(matrix(
+    c(from_long, from_lat, to_long, to_lat),
+    ncol = 2,
+    byrow = TRUE
+  )), crs = 4326)) %>%
+  st_as_sf()
+
+ggplot() +
+  geom_sf(data = be,
+          color = "white",
+          alpha = 0.5) +
+  geom_sf(data = stations_sf,
+          color = "black",
+          size = 1.5) +
+  geom_sf(
+    data = od_lines,
+    aes(color = high_occupancy_rate, alpha = count),
+    linewidth = 1
+  ) +
+  scale_alpha(range = c(0.4, 1), guide = "legend") +
+  scale_color_gradient(low = "grey80", high = "firebrick") +
+  theme_minimal() +
+  labs(
+    title = "OD Connections with High Occupancy Rate",
+    color = "High Occupancy Rate",
+    alpha = "Count",
+    x = "Longitude",
+    y = "Latitude",
+    caption = "Figure 4"
+  ) +
+  theme(plot.caption = element_text(size = 10, face = "italic", hjust = 0))
+```
+
+```{r EDA variables}
+train_type <- data %>%
+  group_by(type) %>%
+  summarize(
+    count = n(),
+    high_occupancy_rate = mean(occupancy_classifier, na.rm = TRUE)
+  )
+
+weather.Panel <- data %>%
+  group_by(date) %>%
+  summarize(Temperature = max(Temperature),
+            Precipitation = max(Precipitation))
+
+grid.arrange(
+  arrangeGrob(
+    ggplot(train_type, aes(
+      x = fct_reorder(type, count, .desc = TRUE), y = count
+    )) +
+      geom_col(
+        position = position_dodge(width = 0.7),
+        show.legend = FALSE,
+        width = 0.7
+      ) +
+      labs(title = "Number of Trains by Train Type", x = "Train Type", y = "Number of Trains") +
+      theme_minimal(),
+    ggplot(train_type, aes(
+      x = fct_reorder(type, count, .desc = TRUE), y = high_occupancy_rate
+    )) +
+      geom_col(
+        position = position_dodge(width = 0.7),
+        show.legend = FALSE,
+        width = 0.7
+      ) +
+      labs(title = "High Occupancy Rate by Train Type", x = "Train Type", y = "High Occupancy Rate") +
+      theme_minimal(),
+    ggplot(weather.Panel, aes(date, Temperature)) + geom_line() +
+      labs(title = "Temperature", x = "Day", y = "Temperature") + theme_minimal(),
+    ggplot(weather.Panel, aes(date, Precipitation)) + geom_line() +
+      labs(title = "Percipitation", x = "Day", y = "Precipitation") + theme_minimal(),
+    ncol = 2,
+    nrow = 2
+  ),
+  bottom = textGrob(
+    "Figure 5",
+    x = 0.1,
+    gp = gpar(fontsize = 10, fontface = "italic")
+  )
+)
+
+grid.arrange(
+  arrangeGrob(
+    ggplot(data, aes(x = from_passenger)) +
+      geom_histogram(bins = 20) +
+      labs(title = "Daily Passenger Count of Origins", x = "Passenger", y = "Frequency") +
+      theme_minimal(),
+    ggplot(data, aes(x = to_passenger)) +
+      geom_histogram(bins = 20) +
+      labs(title = "Daily Passenger Count of Destinations", x = "Passenger", y = "Frequency") +
+      theme_minimal(),
+    ggplot(data, aes(x = freq_from)) +
+      geom_histogram(bins = 20) +
+      labs(title = "One-hour Train Count of Origins", x = "Train", y = "Frequency") +
+      theme_minimal(),
+    ggplot(data, aes(x = freq_to)) +
+      geom_histogram(bins = 20) +
+      labs(title = "One-hour Train Count of Destinations", x = "To Frequency", y = "Frequency") +
+      theme_minimal(),
+    ncol = 2,
+    nrow = 2
+  ),
+  bottom = textGrob(
+    "Figure 6",
+    x = 0.1,
+    gp = gpar(fontsize = 10, fontface = "italic")
+  )
+)
+
+data %>%
+  dplyr::select(occupancy_classifier,
+                Temperature,
+                Precipitation,
+                OD_passenger,
+                Frequency) %>%
+  gather(Variable, value, -occupancy_classifier) %>%
+  mutate(Variable = factor(
+    Variable,
+    levels = c("Temperature", "Precipitation", "OD_passenger", "Frequency")
+  )) %>%
+  ggplot() +
+  geom_density(aes(value, color = as.factor(occupancy_classifier)), fill = "transparent") +
+  facet_wrap(~ Variable, scales = "free") +
+  scale_color_manual(values = c("firebrick", "skyblue4")) +
+  labs(title = "Feature Distributions of Occupancy",
+       color = "Occupancy Classifier",
+       caption = "Figure 7") +
+  theme(plot.caption = element_text(size = 10, face = "italic", hjust = 0))
+```
+
+
+```{r sets}
+data_model <- data %>% dplyr::select(
+  occupancy_classifier,
+  from,
+  to,
+  datetime_combined,
+  hour,
+  dotw,
+  type,
+  Temperature,
+  Precipitation,
+  OD_passenger,
+  Frequency
+) %>%
+  mutate(dotw = as.character(dotw), hour = as.factor(hour))
+
+set.seed(888)
+trainIndex <- createDataPartition(
+  data_model$occupancy_classifier,
+  p = 0.7,
+  list = FALSE,
+  times = 1
+)
+
+dataTrain <- data_model[trainIndex, ]
+dataTest <- data_model[-trainIndex, ]
+```
+
+```{r nearest neighbor}
+from_sum <- dataTrain %>%
+  group_by(from) %>%
+  summarize(from_count = n(),
+            from_sum = sum(occupancy_classifier, na.rm = TRUE))
+
+to_sum <- dataTrain %>%
+  group_by(to) %>%
+  summarize(to_count = n(),
+            to_sum = sum(occupancy_classifier, na.rm = TRUE))
+
+stations_train <- stations_sf[, c(1, 12)] %>%
+  left_join(from_sum, by = c("code" = "from")) %>%
+  left_join(to_sum, by = c("code" = "to")) %>%
+  replace(is.na(.), 0) %>%
+  mutate(overall_count = from_count + to_count,
+         overall_sum = from_sum + to_sum)
+
+coords <- st_coordinates(stations_train)
+
+knn_nb <- knn2nb(knearneigh(coords, k = 5))
+
+neighbor_results <- lapply(1:length(knn_nb), function(i) {
+  neighbors <- knn_nb[[i]]
+  
+  overall_count_sum <- sum(stations_train$overall_count[neighbors], na.rm = TRUE)
+  overall_sum_sum <- sum(stations_train$overall_sum[neighbors], na.rm = TRUE)
+  
+  return(
+    data.frame(overall_count_sum = overall_count_sum, overall_sum_sum = overall_sum_sum)
+  )
+})
+
+neighbor_results_df <- do.call(rbind, neighbor_results)
+
+stations_train <- stations_train %>%
+  bind_cols(neighbor_results_df) %>%
+  mutate(neighbor = overall_sum_sum / overall_count_sum) %>%
+  st_drop_geometry()
+
+dataTrain <- dataTrain %>%
+  left_join(
+    stations_train %>% select(code, neighbor) %>% rename(from_neighbor = neighbor),
+    by = c("from" = "code")
+  ) %>%
+  left_join(
+    stations_train %>% select(code, neighbor) %>% rename(to_neighbor = neighbor),
+    by = c("to" = "code")
+  ) %>%
+  mutate(OD_neighbor = (from_neighbor + to_neighbor) / 2) 
+```
+
+```{r nearest trains}
+dataTrain <- dataTrain %>%
+  mutate(
+    mapped_date = as.Date(start_date) + ((as.numeric(
+      as.Date(datetime_combined) - as.Date(start_date)
+    )) %% 7),
+    mapped_datetime = as.POSIXct(paste(
+      mapped_date, format(datetime_combined, "%H:%M:%S")
+    ), format = "%Y-%m-%d %H:%M:%S")
+  )
+
+datetime <- dataTrain %>%
+  dplyr::select(occupancy_classifier, datetime_combined, mapped_datetime) %>%
+  arrange(mapped_datetime) %>%
+  slice(1:20) %>%
+  mutate(mapped_datetime = mapped_datetime + days(7)) %>%
+  bind_rows(
+    dataTrain %>%
+      dplyr::select(occupancy_classifier, datetime_combined, mapped_datetime) %>%
+      arrange(mapped_datetime) %>%
+      slice((n() - 19):n()) %>%
+      mutate(mapped_datetime = mapped_datetime - days(7))
+  ) %>%
+  bind_rows(
+    dataTrain %>%
+      dplyr::select(occupancy_classifier, datetime_combined, mapped_datetime)
+  )
+
+datetime <- datetime %>%
+  arrange(mapped_datetime)
+
+dataTrain <- dataTrain %>%
+  mutate(Adjacant = map_dbl(1:n(), function(i) {
+    distances <- abs(as.numeric(datetime$mapped_datetime - mapped_datetime[i]))
+    nearest_indices <- order(distances)[1:20]
+    mean(datetime$occupancy_classifier[nearest_indices], na.rm = TRUE)
+  }))
+```
+
+```{r model}
+model <- glm(
+  occupancy_classifier ~ type + Temperature + OD_passenger + Frequency + OD_neighbor + Adjacant,
+  data = dataTrain,
+  family = "binomial" (link = "logit")
+)
+
+model_summary <- tidy(model) %>%
+  mutate(
+    significance = case_when(
+      p.value < 0.001 ~ "***",
+      p.value < 0.01 ~ "**",
+      p.value < 0.05 ~ "*",
+      p.value < 0.1 ~ ".",
+      TRUE ~ ""
+    )
+  ) %>%
+  select(term, estimate, p.value, significance) %>%
+  rename(
+    Variable = term,
+    Coefficient = estimate,
+    P_Value = p.value,
+    Sig. = significance
+  )
+
+descriptions <- tibble(
+  Variable = c(
+    "(Intercept)",
+    "typeL",
+    "typeOther",
+    "typeP",
+    "typeS",
+    "Temperature",
+    "OD_passenger",
+    "Frequency",
+    "OD_neighbor",
+    "Adjacant"
+  ),
+  Description = c(
+    "",
+    "Includes Inter City (IC), Local (L), Peak (P), Suburban (S), and other types (combined due to lower counts) of trains. Extracted from the 'vehicle' column in the original dataset.",
+    "",
+    "",
+    "",
+    "The average temperature in Brussels on the day. Sourced from Weather and Climate.",
+    "The product of the logarithm of average daily passenger flow at origin and destination stations. Computed using passenger count data from SNCB (2016).",
+    "The average number of trains passing through the origin and destination stations within 30 minutes before and after the train's travel time. Computed using punctuality data from Open Data Wallonie-Bruxelles.",
+    "The average High Occupancy Rate of the five nearest stations of the origin and destination (included) stations. Computed using station location information extracted from the original dataset.",
+    "The High Occupancy Rate of the 20 trains closest in time to the train's travel time, within a week-integrated dataset. Computed using time information extracted from the original dataset."
+  )
+)
+
+model_summary <- model_summary %>%
+  left_join(descriptions, by = "Variable")
+
+kable(model_summary,
+      format = "markdown",
+      digits = 4,
+      caption = "Table 1: Summary of the Logistic Regression Model")
+```
+
+```{r test}
+dataTest <- dataTest %>%
+  left_join(
+    stations_train %>% select(code, neighbor) %>% rename(from_neighbor = neighbor),
+    by = c("from" = "code")
+  ) %>%
+  left_join(
+    stations_train %>% select(code, neighbor) %>% rename(to_neighbor = neighbor),
+    by = c("to" = "code")
+  ) %>%
+  mutate(OD_neighbor = (from_neighbor + to_neighbor) / 2)
+
+dataTest <- dataTest %>%
+  mutate(
+    mapped_date = as.Date(start_date) + ((as.numeric(
+      as.Date(datetime_combined) - as.Date(start_date)
+    )) %% 7),
+    mapped_datetime = as.POSIXct(paste(
+      mapped_date, format(datetime_combined, "%H:%M:%S")
+    ), format = "%Y-%m-%d %H:%M:%S")
+  )
+
+dataTest <- dataTest %>%
+  mutate(Adjacant = map_dbl(1:n(), function(i) {
+    distances <- abs(as.numeric(datetime$mapped_datetime - mapped_datetime[i]))
+    nearest_indices <- order(distances)[1:20]
+    mean(datetime$occupancy_classifier[nearest_indices], na.rm = TRUE)
+  }))
+
+dataTest <- dataTest %>%
+  mutate(occupancy_classifier = factor(
+    occupancy_classifier,
+    levels = c(0, 1),
+    labels = c("Low", "High")
+  ))
+
+testProbs <- data.frame(
+  Outcome = dataTest$occupancy_classifier,
+  Probs = predict(model, dataTest, type = "response")
+)
+```
+
+```{r ROC}
+auc_value <- auc(testProbs$Outcome, testProbs$Probs)
+
+ggplot(testProbs, aes(d = as.numeric(Outcome), m = Probs)) +
+  geom_roc(n.cuts = 50,
+           labels = FALSE,
+           colour = "skyblue4") +
+  style_roc(theme = theme_grey) +
+  geom_abline(
+    slope = 1,
+    intercept = 0,
+    linewidth = 1,
+    color = 'grey'
+  ) +
+  geom_text(
+    aes(
+      x = 0,
+      y = 0.9,
+      label = paste("ROC:", round(auc_value, 4))
+    ),
+    colour = "black",
+    size = 4,
+    hjust = 0
+  ) +
+  labs(title = "ROC Curve", caption = "Figure 9") +
+  theme(plot.caption = element_text(size = 10, face = "italic", hjust = 0))
+```
+
+```{r threshold}
+iterateThresholds <- function(data) {
+  x = .01
+  all_prediction <- data.frame()
+  while (x <= 1) {
+    this_prediction <-
+      testProbs %>%
+      mutate(predOutcome = ifelse(Probs > x, "High", "Low")) %>%
+      count(predOutcome, Outcome) %>%
+      summarize(
+        True_Negative = sum(n[predOutcome == "Low" & Outcome == "Low"]),
+        True_Positive = sum(n[predOutcome == "High" &
+                                Outcome == "High"]),
+        False_Negative = sum(n[predOutcome == "Low" &
+                                 Outcome == "High"]),
+        False_Positive = sum(n[predOutcome == "High" &
+                                 Outcome == "Low"])
+      ) %>%
+      gather(Variable, Count) %>%
+      mutate(
+        Utility =
+          ifelse(
+            Variable == "True_Negative",
+            0 * Count,
+            ifelse(
+              Variable == "True_Positive",
+              2 * Count,
+              ifelse(
+                Variable == "False_Negative",
+                0 * Count,
+                ifelse(Variable == "False_Positive", (-1) * Count, 0)
+              )
+            )
+          ),
+        Threshold = x
+      )
+    
+    all_prediction <- rbind(all_prediction, this_prediction)
+    x <- x + .01
+  }
+  return(all_prediction)
+}
+
+whichThreshold <- iterateThresholds(testProbs)
+
+whichThreshold_utility <-
+  whichThreshold %>%
+  group_by(Threshold) %>%
+  summarize(Utility = sum(Utility))
+
+optimal_threshold <- whichThreshold_utility %>%
+  filter(Utility == max(Utility)) %>%
+  pull(Threshold)
+
+ggplot(whichThreshold_utility) +
+  geom_line(aes(x = Threshold, y = Utility),
+            color = "skyblue4",
+            size = 1) +
+  geom_vline(
+    xintercept = pull(arrange(whichThreshold_utility, -Utility)[1, 1]),
+    color = "firebrick",
+    size = 1,
+    linetype = 3
+  ) +
+  annotate(
+    "text",
+    x = optimal_threshold[1],
+    y = 0,
+    label = paste("Optimal Threshold:", optimal_threshold[1]),
+    hjust = -0.1,
+    vjust = -0.5,
+    color = "black",
+    size = 4
+  ) +
+  labs(title = "Model Utilities By Threshold For Test Set",
+       subtitle = "Vertical Line Denotes Optimal Threshold",
+       caption = "Figure 9") +
+  theme(plot.caption = element_text(size = 10, face = "italic", hjust = 0))
+```
+
+
+```{r confusion matrix, include=TRUE}
+threshold <- optimal_threshold
+
+testProbs <- testProbs %>%
+  mutate(
+    Predicted = ifelse(Probs >= threshold, "High", "Low"),
+    Predicted = factor(Predicted, levels = c("Low", "High"))
+  )
+
+confusion_matrix <- confusionMatrix(testProbs$Predicted, testProbs$Outcome, positive = "High")
+
+accuracy <- round(confusion_matrix$overall["Accuracy"], 4)
+sensitivity <- round(confusion_matrix$byClass["Sensitivity"], 4)
+specificity <- round(confusion_matrix$byClass["Specificity"], 4)
+
+cat(
+  "Accuracy:",
+  accuracy,
+  "Sensitivity:",
+  sensitivity,
+  "Specificity:",
+  specificity,
+  "\n"
+)
+```
+
+```{r repitition threshold}
+thresholds <- list()
+
+for (i in 1:100) {
+  set.seed(888 + i)
+  trainIndex <- createDataPartition(
+    data_model$occupancy_classifier,
+    p = 0.7,
+    list = FALSE,
+    times = 1
+  )
+  
+  dataTrain <- data_model[trainIndex, ]
+  dataTest <- data_model[-trainIndex, ]
+  
+  from_sum <- dataTrain %>%
+    group_by(from) %>%
+    summarize(from_count = n(),
+              from_sum = sum(occupancy_classifier, na.rm = TRUE))
+  
+  to_sum <- dataTrain %>%
+    group_by(to) %>%
+    summarize(to_count = n(),
+              to_sum = sum(occupancy_classifier, na.rm = TRUE))
+  
+  stations_train <- stations_sf[, c(1, 12)] %>%
+    left_join(from_sum, by = c("code" = "from")) %>%
+    left_join(to_sum, by = c("code" = "to")) %>%
+    replace(is.na(.), 0) %>%
+    mutate(overall_count = from_count + to_count,
+           overall_sum = from_sum + to_sum)
+  
+  coords <- st_coordinates(stations_train)
+  
+  knn_nb <- knn2nb(knearneigh(coords, k = 5))
+  
+  neighbor_results <- lapply(1:length(knn_nb), function(i) {
+    neighbors <- knn_nb[[i]]
+    
+    overall_count_sum <- sum(stations_train$overall_count[neighbors], na.rm = TRUE)
+    overall_sum_sum <- sum(stations_train$overall_sum[neighbors], na.rm = TRUE)
+    
+    return(
+      data.frame(
+        overall_count_sum = overall_count_sum,
+        overall_sum_sum = overall_sum_sum
+      )
+    )
+  })
+  
+  neighbor_results_df <- do.call(rbind, neighbor_results)
+  
+  stations_train <- stations_train %>%
+    bind_cols(neighbor_results_df) %>%
+    mutate(neighbor = overall_sum_sum / overall_count_sum) %>%
+    st_drop_geometry()
+  
+  dataTrain <- dataTrain %>%
+    left_join(
+      stations_train %>% select(code, neighbor) %>% rename(from_neighbor = neighbor),
+      by = c("from" = "code")
+    ) %>%
+    left_join(
+      stations_train %>% select(code, neighbor) %>% rename(to_neighbor = neighbor),
+      by = c("to" = "code")
+    ) %>%
+    mutate(OD_neighbor = (from_neighbor + to_neighbor) / 2)
+  
+  dataTrain <- dataTrain %>%
+    mutate(
+      mapped_date = as.Date(start_date) + ((as.numeric(
+        as.Date(datetime_combined) - as.Date(start_date)
+      )) %% 7),
+      mapped_datetime = as.POSIXct(paste(
+        mapped_date, format(datetime_combined, "%H:%M:%S")
+      ), format = "%Y-%m-%d %H:%M:%S")
+    )
+  
+  datetime <- dataTrain %>%
+    dplyr::select(occupancy_classifier, datetime_combined, mapped_datetime) %>%
+    arrange(mapped_datetime) %>%
+    slice(1:20) %>%
+    mutate(mapped_datetime = mapped_datetime + days(7)) %>%
+    bind_rows(
+      dataTrain %>%
+        dplyr::select(occupancy_classifier, datetime_combined, mapped_datetime) %>%
+        arrange(mapped_datetime) %>%
+        slice((n() - 19):n()) %>%
+        mutate(mapped_datetime = mapped_datetime - days(7))
+    ) %>%
+    bind_rows(
+      dataTrain %>%
+        dplyr::select(occupancy_classifier, datetime_combined, mapped_datetime)
+    )
+  
+  datetime <- datetime %>%
+    arrange(mapped_datetime)
+  
+  dataTrain <- dataTrain %>%
+    mutate(Adjacant = map_dbl(1:n(), function(i) {
+      distances <- abs(as.numeric(datetime$mapped_datetime - mapped_datetime[i]))
+      nearest_indices <- order(distances)[1:20]
+      mean(datetime$occupancy_classifier[nearest_indices], na.rm = TRUE)
+    }))
+  
+  model <- glm(
+    occupancy_classifier ~ type + Temperature + OD_passenger + Frequency + OD_neighbor + Adjacant,
+    data = dataTrain,
+    family = "binomial" (link = "logit")
+  )
+  
+  dataTest <- dataTest %>%
+    left_join(
+      stations_train %>% select(code, neighbor) %>% rename(from_neighbor = neighbor),
+      by = c("from" = "code")
+    ) %>%
+    left_join(
+      stations_train %>% select(code, neighbor) %>% rename(to_neighbor = neighbor),
+      by = c("to" = "code")
+    ) %>%
+    mutate(OD_neighbor = (from_neighbor + to_neighbor) / 2)
+  
+  dataTest <- dataTest %>%
+    mutate(
+      mapped_date = as.Date(start_date) + ((as.numeric(
+        as.Date(datetime_combined) - as.Date(start_date)
+      )) %% 7),
+      mapped_datetime = as.POSIXct(paste(
+        mapped_date, format(datetime_combined, "%H:%M:%S")
+      ), format = "%Y-%m-%d %H:%M:%S")
+    )
+  
+  dataTest <- dataTest %>%
+    mutate(Adjacant = map_dbl(1:n(), function(i) {
+      distances <- abs(as.numeric(datetime$mapped_datetime - mapped_datetime[i]))
+      nearest_indices <- order(distances)[1:20]
+      mean(datetime$occupancy_classifier[nearest_indices], na.rm = TRUE)
+    }))
+  
+  dataTest <- dataTest %>%
+    mutate(occupancy_classifier = factor(
+      occupancy_classifier,
+      levels = c(0, 1),
+      labels = c("Low", "High")
+    ))
+  
+  testProbs <- data.frame(
+    Outcome = as.factor(dataTest$occupancy_classifier),
+    Probs = predict(model, dataTest, type = "response")
+  )
+  
+  iterateThresholds <- function(data) {
+    x = .01
+    all_prediction <- data.frame()
+    while (x <= 1) {
+      this_prediction <-
+        testProbs %>%
+        mutate(predOutcome = ifelse(Probs > x, "High", "Low")) %>%
+        count(predOutcome, Outcome) %>%
+        summarize(
+          True_Negative = sum(n[predOutcome == "Low" & Outcome == "Low"]),
+          True_Positive = sum(n[predOutcome == "High" &
+                                  Outcome == "High"]),
+          False_Negative = sum(n[predOutcome == "Low" &
+                                   Outcome == "High"]),
+          False_Positive = sum(n[predOutcome == "High" &
+                                   Outcome == "Low"])
+        ) %>%
+        gather(Variable, Count) %>%
+        mutate(
+          Revenue =
+            ifelse(
+              Variable == "True_Negative",
+              0 * Count,
+              ifelse(
+                Variable == "True_Positive",
+                2 * Count,
+                ifelse(
+                  Variable == "False_Negative",
+                  0 * Count,
+                  ifelse(Variable == "False_Positive", (-1) * Count, 0)
+                )
+              )
+            ),
+          Threshold = x
+        )
+      
+      all_prediction <- rbind(all_prediction, this_prediction)
+      x <- x + .01
+    }
+    return(all_prediction)
+  }
+  
+  whichThreshold <- iterateThresholds(testProbs)
+  
+  whichThreshold_revenue <-
+    whichThreshold %>%
+    group_by(Threshold) %>%
+    summarize(Revenue = sum(Revenue))
+  
+  optimal_threshold <- whichThreshold_revenue %>%
+    filter(Revenue == max(Revenue)) %>%
+    pull(Threshold)
+  
+  thresholds[[i]] <- list(optimal_threshold = optimal_threshold)
+  
+  # cat("Iteration:", i, "Optimal Threshold:", optimal_threshold, "\n")
+}
+
+avg_optimal_threshold <- mean(sapply(thresholds, function(res) res$optimal_threshold[1]), na.rm = T)
+# cat("Average Optimal Threshold over 100 runs:", avg_optimal_threshold, "\n")
+```
+
+```{r repitition metrics}
+results <- list()
+
+for (i in 1:100) {
+  set.seed(1000 + i)
+  trainIndex <- createDataPartition(
+    data_model$occupancy_classifier,
+    p = 0.7,
+    list = FALSE,
+    times = 1
+  )
+  
+  dataTrain <- data_model[trainIndex, ]
+  dataTest <- data_model[-trainIndex, ]
+  
+  from_sum <- dataTrain %>%
+    group_by(from) %>%
+    summarize(from_count = n(),
+              from_sum = sum(occupancy_classifier, na.rm = TRUE))
+  
+  to_sum <- dataTrain %>%
+    group_by(to) %>%
+    summarize(to_count = n(),
+              to_sum = sum(occupancy_classifier, na.rm = TRUE))
+  
+  stations_train <- stations_sf[, c(1, 12)] %>%
+    left_join(from_sum, by = c("code" = "from")) %>%
+    left_join(to_sum, by = c("code" = "to")) %>%
+    replace(is.na(.), 0) %>%
+    mutate(overall_count = from_count + to_count,
+           overall_sum = from_sum + to_sum)
+  
+  coords <- st_coordinates(stations_train)
+  
+  knn_nb <- knn2nb(knearneigh(coords, k = 5))
+  
+  neighbor_results <- lapply(1:length(knn_nb), function(i) {
+    neighbors <- knn_nb[[i]]
+    
+    overall_count_sum <- sum(stations_train$overall_count[neighbors], na.rm = TRUE)
+    overall_sum_sum <- sum(stations_train$overall_sum[neighbors], na.rm = TRUE)
+    
+    return(
+      data.frame(
+        overall_count_sum = overall_count_sum,
+        overall_sum_sum = overall_sum_sum
+      )
+    )
+  })
+  
+  neighbor_results_df <- do.call(rbind, neighbor_results)
+  
+  stations_train <- stations_train %>%
+    bind_cols(neighbor_results_df) %>%
+    mutate(neighbor = overall_sum_sum / overall_count_sum) %>%
+    st_drop_geometry()
+  
+  dataTrain <- dataTrain %>%
+    left_join(
+      stations_train %>% select(code, neighbor) %>% rename(from_neighbor = neighbor),
+      by = c("from" = "code")
+    ) %>%
+    left_join(
+      stations_train %>% select(code, neighbor) %>% rename(to_neighbor = neighbor),
+      by = c("to" = "code")
+    ) %>%
+    mutate(OD_neighbor = (from_neighbor + to_neighbor) / 2)
+  
+  dataTrain <- dataTrain %>%
+    mutate(
+      mapped_date = as.Date(start_date) + ((as.numeric(
+        as.Date(datetime_combined) - as.Date(start_date)
+      )) %% 7),
+      mapped_datetime = as.POSIXct(paste(
+        mapped_date, format(datetime_combined, "%H:%M:%S")
+      ), format = "%Y-%m-%d %H:%M:%S")
+    )
+  
+  datetime <- dataTrain %>%
+    dplyr::select(occupancy_classifier, datetime_combined, mapped_datetime) %>%
+    arrange(mapped_datetime) %>%
+    slice(1:20) %>%
+    mutate(mapped_datetime = mapped_datetime + days(7)) %>%
+    bind_rows(
+      dataTrain %>%
+        dplyr::select(occupancy_classifier, datetime_combined, mapped_datetime) %>%
+        arrange(mapped_datetime) %>%
+        slice((n() - 19):n()) %>%
+        mutate(mapped_datetime = mapped_datetime - days(7))
+    ) %>%
+    bind_rows(
+      dataTrain %>%
+        dplyr::select(occupancy_classifier, datetime_combined, mapped_datetime)
+    )
+  
+  datetime <- datetime %>%
+    arrange(mapped_datetime)
+  
+  dataTrain <- dataTrain %>%
+    mutate(Adjacant = map_dbl(1:n(), function(i) {
+      distances <- abs(as.numeric(datetime$mapped_datetime - mapped_datetime[i]))
+      nearest_indices <- order(distances)[1:20]
+      mean(datetime$occupancy_classifier[nearest_indices], na.rm = TRUE)
+    }))
+  
+  model <- glm(
+    occupancy_classifier ~ type + Temperature + OD_passenger + Frequency + OD_neighbor + Adjacant,
+    data = dataTrain,
+    family = "binomial" (link = "logit")
+  )
+  
+  dataTest <- dataTest %>%
+    left_join(
+      stations_train %>% select(code, neighbor) %>% rename(from_neighbor = neighbor),
+      by = c("from" = "code")
+    ) %>%
+    left_join(
+      stations_train %>% select(code, neighbor) %>% rename(to_neighbor = neighbor),
+      by = c("to" = "code")
+    ) %>%
+    mutate(OD_neighbor = (from_neighbor + to_neighbor) / 2)
+  
+  dataTest <- dataTest %>%
+    mutate(
+      mapped_date = as.Date(start_date) + ((as.numeric(
+        as.Date(datetime_combined) - as.Date(start_date)
+      )) %% 7),
+      mapped_datetime = as.POSIXct(paste(
+        mapped_date, format(datetime_combined, "%H:%M:%S")
+      ), format = "%Y-%m-%d %H:%M:%S")
+    )
+  
+  dataTest <- dataTest %>%
+    mutate(Adjacant = map_dbl(1:n(), function(i) {
+      distances <- abs(as.numeric(datetime$mapped_datetime - mapped_datetime[i]))
+      nearest_indices <- order(distances)[1:20]
+      mean(datetime$occupancy_classifier[nearest_indices], na.rm = TRUE)
+    }))
+  
+  dataTest <- dataTest %>%
+    mutate(occupancy_classifier = factor(
+      occupancy_classifier,
+      levels = c(0, 1),
+      labels = c("Low", "High")
+    ))
+  
+  testProbs <- data.frame(
+    Outcome = as.factor(dataTest$occupancy_classifier),
+    Probs = predict(model, dataTest, type = "response")
+  )
+  
+  auc_value <- auc(testProbs$Outcome, testProbs$Probs)
+  
+  threshold <- avg_optimal_threshold
+  
+  testProbs <- testProbs %>%
+    mutate(
+      Predicted = ifelse(Probs >= threshold, "High", "Low"),
+      Predicted = factor(Predicted, levels = c("Low", "High"))
+    )
+  
+  
+  confusion_matrix <- confusionMatrix(testProbs$Predicted, testProbs$Outcome, positive = "High")
+  
+  sensitivity <- confusion_matrix$byClass["Sensitivity"]
+  specificity <- confusion_matrix$byClass["Specificity"]
+  
+  results[[i]] <- list(auc_value = auc_value,
+                       sensitivity = sensitivity,
+                       specificity = specificity)
+  
+  # cat("Iteration:", i, "AUC Value:", round(auc_value, 4), "Sensitivity:", round(sensitivity, 4),
+  #     "Specificity:", round(specificity, 4), "\n")
+}
+
+# avg_auc_value <- mean(sapply(results, function(res) res$auc_value), na.rm = T)
+# avg_sensitivity <- mean(sapply(results, function(res) res$sensitivity))
+# avg_specificity <- mean(sapply(results, function(res) res$specificity))
+#
+# cat("Average AUC Value over 100 runs:", round(avg_auc_value, 4), "\n")
+# cat("Average Sensitivity over 100 runs:", round(avg_sensitivity, 4), "\n")
+# cat("Average Specificity over 100 runs:", round(avg_specificity, 4), "\n")
+```
+
+```{r plot, include=TRUE}
+metrics_data <- data.frame(
+  Threshold = sapply(thresholds, function(x)
+    x$optimal_threshold[1]),
+  AUC_Value = sapply(results, function(x)
+    x$auc_value),
+  Sensitivity = sapply(results, function(x)
+    x$sensitivity),
+  Specificity = sapply(results, function(x)
+    x$specificity)
+)
+
+metrics_long <- metrics_data %>%
+  gather(key = "metric", value = "value") %>%
+  mutate(metric = factor(
+    metric,
+    levels = c("AUC_Value", "Threshold", "Sensitivity", "Specificity")
+  ))
+
+metrics_means <- metrics_long %>%
+  group_by(metric) %>%
+  summarize(mean = mean(value))
+
+metrics_long %>%
+  left_join(metrics_means, by = "metric") %>%
+  ggplot(aes(value)) +
+  geom_histogram(bins = 20, fill = "skyblue4") +
+  facet_wrap(~ metric, scales = "free") +
+  geom_vline(
+    aes(xintercept = mean),
+    colour = "firebrick",
+    linetype = 3,
+    size = 1
+  ) +
+  labs(
+    x = "Metric Value",
+    y = "Count",
+    title = "Simulation Metrics Distributions",
+    subtitle = "Dotted lines represent the mean value",
+    caption = "Figure 10"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.caption = element_text(size = 10, face = "italic", hjust = 0),
+    strip.text = element_text(face = "bold")
+  )
+
+metrics_means %>%
+  rowwise() %>%
+  mutate(output = paste("Average", metric, "over 100 runs:", round(mean, 4))) %>%
+  pull(output) %>%
+  cat(sep = "\n")
+```
