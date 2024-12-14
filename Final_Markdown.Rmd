@@ -1,31 +1,18 @@
 ---
 title: "Final Project"
 author: "Guangze Sun & Nick Lenz"
-date: "2024-12-10"
+date: "2024-12-13"
+bibliography: references.bib
+csl: apa.csl
 output:
   html_document:
+    toc: true
+    theme: spacelab
+    toc_float: true
+    toc_depth: 2
     code_folding: hide
+    number_sections: true
 ---
-## 0. Pechakucha presentation
-
-https://www.youtube.com/watch?v=AV7JtyboBkQ
-
-## 1. Use case motivation
-
-For years, Belgium transportation planners have struggled to accurately predict overcrowding on their trains. The national railway company, SNCB (NMBS), coordinates with other passenger railroad companies to release schedules up to four months in advance. Due to the advanced nature of these schedules, SNCB has difficulty preventing overcrowding and can only limit overcrowding in real-time by releasing additional trains (or “special trains”). These special trains relieve pressure on the system and prevent dangerous levels of overcrowding. However, as the COVID-19 pandemic has changed the way people work and weakened the traditional 9-5 work schedule, demand for trains has fundamentally changed. Whereas before the pandemic, train transportation planners could generally extrapolate past patterns onto future schedules, planning to limit overcrowding after the pandemic does not have these same patterns. There may be new work travel patterns related to work from home and more leisure travel on off days. SNCB has already struggled to respond to new travel demands. In 2021, overcrowding on summer trains to the Belgian seaside resulted in some trains reaching 130% of their capacity, a dangerous level of overcrowding (Chini, 2021). Yet, transportation planners still need to make the same predictions months in advance and release those schedules to the public. This new era requires a new way to predict overcrowding on trains and allow transportation planners to make schedule adjustments months in the past that will have positive impacts on schedules in the future. 
-
-
-Therefore, we developed a model that will accurately predict for train overcrowding based on past data. Our model is based on a series of datasets related to past trains including the frequency, station, line, weather, time, day of the week, etc. The model uses a simple binary “yes/no” method relating to train overcrowding, with a logistic regression used to predict overcrowding on the various inputs. We also spent time engineering features to create a model that reveals patterns in the data and used those patterns to create a better model. Our model is designed to be better than the business-as-usual case of predicting overcrowding directly from overcrowding observed in past train schedules. Instead, our model takes into account new inputs (like the weather, the frequency of the train, and the line)  to create predictions that transportation planners can rely on. It also incorporates a cost-benefit analysis of train overcrowding to allow SNCB planners to optimize schedule planning. In use, our model would be used as part of an app, ScheduRail, where transportation planners input their proposed schedule and our model creates predictions for overcrowding based on that schedule. The transportation planner can then go back, add trains to the schedule (or keep it the same), and re-input the schedule to our model until the risk of overcrowding is properly minimized. 
-
-
-Our solution to the problem of scheduling for Belgian transportation planners represents a firm data-based approach that has real results. Moreover, what our model allows for is great flexibility. We plan for the model to constantly adapt its data within the time of the scheduled prediction. Therefore, the model will constantly be fine-tuned to create predictions that are most likely to be accurate for the future schedule. That flexibility and constant adaption, while featuring a large number of input factors, makes our model the ideal one to use to predict future overcrowding in schedules. 
-
-
-We believe that this approach is the best way to create accurate predictions and that the business-as-usual approach risks falling further behind as transportation patterns change. The method for predicting transportation in Belgian rail needs a new, 21st-century data-based solution to prevent overcrowding on trains and give riders of SNCB and other affiliated companies the best experience possible.
-
-## 2. Data wrangling
-
-We used a variety of datasets to create accurate predictions. The base dataset (the one guiding our predictions, and the impetus for our model creation) is a dataset containing train times, the date, the type of train (suburban, inter-city, international, etc.), and the occupancy characteristics of the train (low, medium, high). The base dataset is a highly incomplete picture of trains in Belgium from the end of July 2016 to the end of October 2016 (Note: the data in this analysis is designed to be changed as new inputs emerge).  An affiliated dataset also had a list of stations that aligned with the numeric variables presented in the first dataset. To understand spatial relationships, we utilized datasets containing the geographic coordinates of train stations across Belgium. We then crossed the coordinates of this dataset with the existing stations presented in the first dataset to property select stations existing in both datasets. We also inputted a Shapefile of Belgium  to understand occupancy characteristics by line in a spatial manner. This method allowed us to discover patterns that led to further analyses (described later) on the impact of origin/destination pairs on occupancy characteristics. We believed that another important aspect of train occupancy characteristics was the weather. For instance, during the colder months, people may choose to take the train more than in the warmer months. Due to Belgium's large mode share for cycling, with up to 30% of workers commuting by bicycle, seasonal weather patterns could have drastic impacts on overcrowding potential, especially for suburban or local trains. Therefore, we analyzed temperature data per day from the Royal Meteorological Institute of Belgium as a considered input into our model (while cross-referencing the days with the original base dataset). We also collected data for average station boardings for weekends and weekdays. This dataset informed us of the overcrowding potential originating for certain stations and was helpful when contextualizing origin/destination pairs discovered in the base dataset. Finally, we imported a dataset on the arrivals and departures of trains per station per day. This dataset was important to augment the base dataset, which had a very small sample set of Belgian trains. This dataset allowed us to understand the frequency associated with the trains in the original dataset (since it did not include all of the trains from Belgium). Moreover, having a base for the frequency per hour of trains in a station is helpful for scheduling changes, as transportation planners can optimize frequency while accounting for overcrowding. Since our app, ScheduRail, is designed to be utilized to optimize schedules,  we considered frequency an essential variable to support proper optimization. 
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(message = FALSE, warning = FALSE)
@@ -225,7 +212,28 @@ data <- data %>%
   left_join(weather %>% select(month_day, Temperature, Precipitation), by = "month_day")
 ```
 
-## 3. Exploratory data analysis
+## Pechakucha presentation
+
+https://www.youtube.com/watch?v=AV7JtyboBkQ
+
+## Use case motivation
+
+For years, Belgium transportation planners have struggled to accurately predict overcrowding on their trains. The national railway company, SNCB (NMBS), coordinates with other passenger railroad companies to release schedules up to four months in advance. Due to the advanced nature of these schedules, SNCB has difficulty preventing overcrowding and can only limit overcrowding in real-time by releasing additional trains (or “special trains”). These special trains relieve pressure on the system and prevent dangerous levels of overcrowding. However, as the COVID-19 pandemic has changed the way people work and weakened the traditional 9-5 work schedule, demand for trains has fundamentally changed. Whereas before the pandemic, train transportation planners could generally extrapolate past patterns onto future schedules, planning to limit overcrowding after the pandemic does not have these same patterns. There may be new work travel patterns related to work from home and more leisure travel on off days. SNCB has already struggled to respond to new travel demands. In 2021, overcrowding on summer trains to the Belgian seaside resulted in some trains reaching 130% of their capacity, a dangerous level of overcrowding [@chini2024]. Yet, transportation planners still need to make the same predictions months in advance and release those schedules to the public. This new era requires a new way to predict overcrowding on trains and allow transportation planners to make schedule adjustments months in the past that will have positive impacts on schedules in the future. 
+
+
+Therefore, we developed a model that will accurately predict for train overcrowding based on past data. Our model is based on a series of datasets related to past trains including the frequency, station, line, weather, time, day of the week, etc. The model uses a simple binary “yes/no” method relating to train overcrowding, with a logistic regression used to predict overcrowding on the various inputs. We also spent time engineering features to create a model that reveals patterns in the data and used those patterns to create a better model. Our model is designed to be better than the business-as-usual case of predicting overcrowding directly from overcrowding observed in past train schedules. Instead, our model takes into account new inputs (like the weather, the frequency of the train, and the line)  to create predictions that transportation planners can rely on. It also incorporates a cost-benefit analysis of train overcrowding to allow SNCB planners to optimize schedule planning. In use, our model would be used as part of an app, ScheduRail, where transportation planners input their proposed schedule and our model creates predictions for overcrowding based on that schedule. The transportation planner can then go back, add trains to the schedule (or keep it the same), and re-input the schedule to our model until the risk of overcrowding is properly minimized. 
+
+
+Our solution to the problem of scheduling for Belgian transportation planners represents a firm data-based approach that has real results. Moreover, what our model allows for is great flexibility. We plan for the model to constantly adapt its data within the time of the scheduled prediction. Therefore, the model will constantly be fine-tuned to create predictions that are most likely to be accurate for the future schedule. That flexibility and constant adaption, while featuring a large number of input factors, makes our model the ideal one to use to predict future overcrowding in schedules. 
+
+
+We believe that this approach is the best way to create accurate predictions and that the business-as-usual approach risks falling further behind as transportation patterns change. The method for predicting transportation in Belgian rail needs a new, 21st-century data-based solution to prevent overcrowding on trains and give riders of SNCB and other affiliated companies the best experience possible.
+
+## Data wrangling
+
+We used a variety of datasets to create accurate predictions. The base dataset (the one guiding our predictions, and the impetus for our model creation) is a dataset containing train times, the date, the type of train (suburban, inter-city, international, etc.), and the occupancy characteristics of the train (low, medium, high). The base dataset is a highly incomplete picture of trains in Belgium from the end of July 2016 to the end of October 2016 (Note: the data in this analysis is designed to be changed as new inputs emerge).  An affiliated dataset also had a list of stations that aligned with the numeric variables presented in the first dataset. To understand spatial relationships, we utilized datasets containing the geographic coordinates of train stations across Belgium. We then crossed the coordinates of this dataset with the existing stations presented in the first dataset to property select stations existing in both datasets. We also inputted a Shapefile of Belgium to understand occupancy characteristics by line in a spatial manner [@simplemaps]. This method allowed us to discover patterns that led to further analyses (described later) on the impact of origin/destination pairs on occupancy characteristics. We believed that another important aspect of train occupancy characteristics was the weather. For instance, during the colder months, people may choose to take the train more than in the warmer months. Due to Belgium's large mode share for cycling, with up to 30% of workers commuting by bicycle, seasonal weather patterns could have drastic impacts on overcrowding potential, especially for suburban or local trains [@belgian2024]. Therefore, we analyzed temperature data per day from the Royal Meteorological Institute of Belgium as a considered input into our model (while cross-referencing the days with the original base dataset) [@weather]. We also collected data for average station boardings for weekends and weekdays [@sncb]. This dataset informed us of the overcrowding potential originating for certain stations and was helpful when contextualizing origin/destination pairs discovered in the base dataset. Finally, we imported a dataset on the arrivals and departures of trains per station per day [@odwb]. This dataset was important to augment the base dataset, which had a very small sample set of Belgian trains. This dataset allowed us to understand the frequency associated with the trains in the original dataset (since it did not include all of the trains from Belgium). Moreover, having a base for the frequency per hour of trains in a station is helpful for scheduling changes, as transportation planners can optimize frequency while accounting for overcrowding. Since our app, ScheduRail, is designed to be utilized to optimize schedules,  we considered frequency an essential variable to support proper optimization. 
+
+## Exploratory data analysis
 
 During our exploratory analysis of the datasets, we discovered that certain features had stronger correlations with train overcrowding (or lack thereof) than others.
 
@@ -466,7 +474,7 @@ data %>%
   theme(plot.caption = element_text(size = 10, face = "italic", hjust = 0))
 ```
 
-## 4. Logistic regression
+## Logistic regression
 
 We used logistic regression for modeling, with the binary variable “Occupancy Classifier” (1 for high occupancy, 0 for low occupancy) as the dependent variable, aiming to distinguish trains with high occupancy rates.
 
@@ -662,7 +670,7 @@ kable(model_summary,
       caption = "Table 1: Summary of the Logistic Regression Model")
 ```
 
-## 5. Goodness of fit
+## Goodness of fit
 
 ```{r test}
 dataTest <- dataTest %>%
@@ -706,7 +714,7 @@ testProbs <- data.frame(
 )
 ```
 
-We evaluated model performance using the ROC curve (AUC), accuracy, sensitivity, and specificity. Figure 7 shows the ROC curve based on the test set, illustrating the trade-off between true positive and false positive rates as the classification threshold changes. The AUC value exceeds 0.5 as the curve lies above the y = x line, indicating that it has predictive ability to some extent.
+We evaluated model performance using the ROC curve (AUC), accuracy, sensitivity, and specificity. Figure 8 shows the ROC curve based on the test set, illustrating the trade-off between true positive and false positive rates as the classification threshold changes. The AUC value exceeds 0.5 as the curve lies above the y = x line, indicating that it has predictive ability to some extent.
 
 ```{r ROC}
 auc_value <- auc(testProbs$Outcome, testProbs$Probs)
@@ -732,11 +740,11 @@ ggplot(testProbs, aes(d = as.numeric(Outcome), m = Probs)) +
     size = 4,
     hjust = 0
   ) +
-  labs(title = "ROC Curve", caption = "Figure 9") +
+  labs(title = "ROC Curve", caption = "Figure 8") +
   theme(plot.caption = element_text(size = 10, face = "italic", hjust = 0))
 ```
 
-## 6. Cost-benefit analysis
+## Cost-benefit analysis
 
 To determine the optimal threshold for high/low occupancy classification, we developed a simple cost-benefit analysis model, as shown in Table 2. Incorporating passenger experiences, we used “Utility” instead of “Revenue” to measure the potential benefits of applying the model. Negative predictions (low occupancy) resulted in zero utility since they lead to no schedule adjustments. Positive predictions (high occupancy) resulted in schedule adjustments. For true positives, avoiding discomfort and delays after schedule optimization yielded a utility of 2, while false positives incurred a utility of -1 due to the cost of deploying additional trains. This matrix reflects our prioritization of user experience over infrastructure investment, though the real-world model may differ. Implications of our cost-benefit-analysis approach will be explained later in our analysis reflection. 
 
@@ -878,7 +886,7 @@ cat(
 )
 ```
 
-## 7. Cross validation
+## Performance evaluation
 
 To reduce the instability of single-run predictions, we repeated the above process (splitting the dataset, fitting the model) 100 times to determine the optimal threshold, then repeated it another 100 times to calculate AUC, sensitivity, and specificity. Figure 10 shows the distributions of these metrics over 100 runs. Results show that AUC was consistently above 0.5, indicating the model outperformed random guessing. However, sensitivity and optimal threshold have high variances, reflecting the challenges of modeling occupancy influenced by complex real-world patterns. Ultimately, the model achieved an average sensitivity of 0.5405 and specificity of 0.6376, slightly better than the initial simulation.
 
@@ -1335,10 +1343,16 @@ metrics_means %>%
   cat(sep = "\n")
 ```
 
-## 8. Discussion and conclusion
+## Discussion and conclusion
 
-Our analysis meets the use case we set to address by allowing Belgian transportation planners to forecast train occupancy months in advance and allowing them to change schedules to minimize potential overcrowding. It has a wide variety of input data, which allows for a large degree of customizability for transportation planners. They would, theoretically, input weeks worth of schedules in our model and get results. Even so, we realize that forecasting far in advance is difficult. There are many variables that can change. The Covid-19 pandemic showed that even traditional 9-5 working patterns can be fundamentally disrupted. Our model’s less-than-optimal sensitivity of 0.507, and promising specificity of 0.667 shows the difficulty behind making scheduling predictions. In that sense, when purely considering our cost-benefit analysis of train overcrowding, our model does not do an optimal job at maximizing true positives. Our model does perform better in terms of specificity or the true negative rate. However, even this rate could see improvements. In that light, the model we created may not be as exceptional at predicting overcrowding as we would like. That said, it is still useful for transportation planners. Our ROC curve demonstrates that the model does actually perform better than a coin toss (with an ROC of 0.607), which is essentially what transportation planners are doing now (or rather an educated guess). While the educated guess method may have worked in the past, we believe that recent history has shown that this method has severe flaws. Our analysis outperformed the “business as usual” case in every simulation we ran, and that was with our “business as usual case” simulation representing a more analytical approach to current transportation planning than reality (where reality involves more human analysis, rather than data-based modeling). We set out to help predict high occupancy trains better than the current methodology, and our model does that. However, we acknowledge that there are serious flaws in the model that could be flushed out and that the lack of input data regarding overcrowding hampered our ability to make accurate predictions. Even so, we believe that the model methodology is still a sound way to solve for overcrowding on Belgian trains. 
+Our analysis meets the use case we set to address by allowing Belgian transportation planners to forecast train occupancy months in advance and allowing them to change schedules to minimize potential overcrowding. It has a wide variety of input data, which allows for a large degree of customizability for transportation planners. They would, theoretically, input weeks worth of schedules in our model and get results. Even so, we realize that forecasting far in advance is difficult. There are many variables that can change. The Covid-19 pandemic showed that even traditional 9-5 working patterns can be fundamentally disrupted. Our model’s less-than-optimal sensitivity of 0.541, and promising specificity of 0.638 shows the difficulty behind making scheduling predictions. In that sense, when purely considering our cost-benefit analysis of train overcrowding, our model does not do an optimal job at maximizing true positives. Our model does perform better in terms of specificity or the true negative rate. However, even this rate could see improvements. In that light, the model we created may not be as exceptional at predicting overcrowding as we would like. That said, it is still useful for transportation planners. Our ROC curve demonstrates that the model does actually perform better than a coin toss (with an ROC of 0.633), which is essentially what transportation planners are doing now (or rather an educated guess). While the educated guess method may have worked in the past, we believe that recent history has shown that this method has severe flaws. Our analysis outperformed the “business as usual” case in every simulation we ran, and that was with our “business as usual case” simulation representing a more analytical approach to current transportation planning than reality (where reality involves more human analysis, rather than data-based modeling). We set out to help predict high occupancy trains better than the current methodology, and our model does that. However, we acknowledge that there are serious flaws in the model that could be flushed out and that the lack of input data regarding overcrowding hampered our ability to make accurate predictions. Even so, we believe that the model methodology is still a sound way to solve for overcrowding on Belgian trains. 
 
 We believe that the original dataset we worked with presented a significant challenge for us. The dataset on train occupancy characteristics contained a small (and varied) sample set of trains. For instance, certain months (mainly August and early September) seemed to have far fewer trains than in October (which is not the case in reality). That is because the dataset was an incomplete picture of trains in Belgium and thus an incomplete picture of occupancy. If we had a complete picture of train occupancy throughout the entire year (rather than a small sample dataset) we believe that our model would be more accurate. Moreover, the months present in the dataset only contained one public holiday, so the generalizability of the model to other timeframes with holidays would be poor. Obtaining a dataset with the full year of occupancy would also mean that we would obtain a full year of temperature data and a full picture of train scheduling. While we were able to attain the associated train frequency per station within the time frame of the dataset, an in-depth schedule by train run would be a better determiner of frequency. Our model’s issues with accuracy, sensitivity, and specificity, would be greatly helped with a complete dataset picture. 
 
-We also believe that coordination with SNCB to create a more accurate and useful cost-benefit analysis is paramount. Our current cost-benefit analysis is missing much of the detail necessary for SNCB planners to understand the impact of overcrowding on the system or the cost of adding new trains to combat overcrowding. For instance, we would like to collect data on the cost of servicing additional trains, the cost of operators per additional train, and the cost of additional maintenance on running more trains (both in terms of per train and systemwide). We would also like to know the relative importance to SNCB of minimizing delays and passenger discomfort over the costs associated with servicing more trains to limit overcrowding. Our model’s cost-benefit analysis is designed with the concept that the most important variable for transportation planners (and our use case) is to limit overcrowding. Therefore, we assigned the true positive (Predicted train is overcrowded and train is overcrowded) variable with a number of “2” in relative importance, assuming that transportation planners add trains to the system to avoid overcrowding and delays. Meanwhile, we assigned the false positive variable (Predicted train was overcrowded and train is not overcrowded) with a value of -1, to indicate the cost of sending out additional trains that do not impact overcrowding. These numbers are our best guesses at the relative importance of these cases to SNCB planners, but only SNCB planners could indicate the actual importance. Therefore, working with SNCB to properly create an accurate cost-benefit analysis for their use is critical. Since ScheduRail is designed for SNCB planners, it will need their input to be successful. 
+We also believe that coordination with SNCB to create a more accurate and useful cost-benefit analysis is paramount. Our current cost-benefit analysis is missing much of the detail necessary for SNCB planners to understand the impact of overcrowding on the system or the cost of adding new trains to combat overcrowding. For instance, we would like to collect data on the cost of servicing additional trains, the cost of operators per additional train, and the cost of additional maintenance on running more trains (both in terms of per train and systemwide). We would also like to know the relative importance to SNCB of minimizing delays and passenger discomfort over the costs associated with servicing more trains to limit overcrowding. Our model’s cost-benefit analysis is designed with the concept that the most important variable for transportation planners (and our use case) is to limit overcrowding. With true positive cases assigned a value of 2 and false positive cases assigned a value of -1.These numbers are our best guesses at the relative importance of these cases to SNCB planners, but only SNCB planners could indicate the actual importance. Therefore, working with SNCB to properly create an accurate cost-benefit analysis for their use is critical. Since ScheduRail is designed for SNCB planners, it will need their input to be successful. 
+
+Overall, we believe that our model could be successful, and save transportation planners time and create satisfied SNCB customers. 
+
+## References
+
+
