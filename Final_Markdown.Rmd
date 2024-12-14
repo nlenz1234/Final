@@ -6,6 +6,26 @@ output:
   html_document:
     code_folding: hide
 ---
+## 0. Pechakucha presentation
+
+https://www.youtube.com/watch?v=AV7JtyboBkQ
+
+## 1. Use case motivation
+
+For years, Belgium transportation planners have struggled to accurately predict overcrowding on their trains. The national railway company, SNCB (NMBS), coordinates with other passenger railroad companies to release schedules up to four months in advance. Due to the advanced nature of these schedules, SNCB has difficulty preventing overcrowding and can only limit overcrowding in real-time by releasing additional trains (or “special trains”). These special trains relieve pressure on the system and prevent dangerous levels of overcrowding. However, as the COVID-19 pandemic has changed the way people work and weakened the traditional 9-5 work schedule, demand for trains has fundamentally changed. Whereas before the pandemic, train transportation planners could generally extrapolate past patterns onto future schedules, planning to limit overcrowding after the pandemic does not have these same patterns. There may be new work travel patterns related to work from home and more leisure travel on off days. SNCB has already struggled to respond to new travel demands. In 2021, overcrowding on summer trains to the Belgian seaside resulted in some trains reaching 130% of their capacity, a dangerous level of overcrowding (Chini, 2021). Yet, transportation planners still need to make the same predictions months in advance and release those schedules to the public. This new era requires a new way to predict overcrowding on trains and allow transportation planners to make schedule adjustments months in the past that will have positive impacts on schedules in the future. 
+
+
+Therefore, we developed a model that will accurately predict for train overcrowding based on past data. Our model is based on a series of datasets related to past trains including the frequency, station, line, weather, time, day of the week, etc. The model uses a simple binary “yes/no” method relating to train overcrowding, with a logistic regression used to predict overcrowding on the various inputs. We also spent time engineering features to create a model that reveals patterns in the data and used those patterns to create a better model. Our model is designed to be better than the business-as-usual case of predicting overcrowding directly from overcrowding observed in past train schedules. Instead, our model takes into account new inputs (like the weather, the frequency of the train, and the line)  to create predictions that transportation planners can rely on. It also incorporates a cost-benefit analysis of train overcrowding to allow SNCB planners to optimize schedule planning. In use, our model would be used as part of an app, ScheduRail, where transportation planners input their proposed schedule and our model creates predictions for overcrowding based on that schedule. The transportation planner can then go back, add trains to the schedule (or keep it the same), and re-input the schedule to our model until the risk of overcrowding is properly minimized. 
+
+
+Our solution to the problem of scheduling for Belgian transportation planners represents a firm data-based approach that has real results. Moreover, what our model allows for is great flexibility. We plan for the model to constantly adapt its data within the time of the scheduled prediction. Therefore, the model will constantly be fine-tuned to create predictions that are most likely to be accurate for the future schedule. That flexibility and constant adaption, while featuring a large number of input factors, makes our model the ideal one to use to predict future overcrowding in schedules. 
+
+
+We believe that this approach is the best way to create accurate predictions and that the business-as-usual approach risks falling further behind as transportation patterns change. The method for predicting transportation in Belgian rail needs a new, 21st-century data-based solution to prevent overcrowding on trains and give riders of SNCB and other affiliated companies the best experience possible.
+
+## 2. Data wrangling
+
+We used a variety of datasets to create accurate predictions. The base dataset (the one guiding our predictions, and the impetus for our model creation) is a dataset containing train times, the date, the type of train (suburban, inter-city, international, etc.), and the occupancy characteristics of the train (low, medium, high). The base dataset is a highly incomplete picture of trains in Belgium from the end of July 2016 to the end of October 2016 (Note: the data in this analysis is designed to be changed as new inputs emerge).  An affiliated dataset also had a list of stations that aligned with the numeric variables presented in the first dataset. To understand spatial relationships, we utilized datasets containing the geographic coordinates of train stations across Belgium. We then crossed the coordinates of this dataset with the existing stations presented in the first dataset to property select stations existing in both datasets. We also inputted a Shapefile of Belgium  to understand occupancy characteristics by line in a spatial manner. This method allowed us to discover patterns that led to further analyses (described later) on the impact of origin/destination pairs on occupancy characteristics. We believed that another important aspect of train occupancy characteristics was the weather. For instance, during the colder months, people may choose to take the train more than in the warmer months. Due to Belgium's large mode share for cycling, with up to 30% of workers commuting by bicycle, seasonal weather patterns could have drastic impacts on overcrowding potential, especially for suburban or local trains. Therefore, we analyzed temperature data per day from the Royal Meteorological Institute of Belgium as a considered input into our model (while cross-referencing the days with the original base dataset). We also collected data for average station boardings for weekends and weekdays. This dataset informed us of the overcrowding potential originating for certain stations and was helpful when contextualizing origin/destination pairs discovered in the base dataset. Finally, we imported a dataset on the arrivals and departures of trains per station per day. This dataset was important to augment the base dataset, which had a very small sample set of Belgian trains. This dataset allowed us to understand the frequency associated with the trains in the original dataset (since it did not include all of the trains from Belgium). Moreover, having a base for the frequency per hour of trains in a station is helpful for scheduling changes, as transportation planners can optimize frequency while accounting for overcrowding. Since our app, ScheduRail, is designed to be utilized to optimize schedules,  we considered frequency an essential variable to support proper optimization. 
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(message = FALSE, warning = FALSE)
@@ -205,6 +225,12 @@ data <- data %>%
   left_join(weather %>% select(month_day, Temperature, Precipitation), by = "month_day")
 ```
 
+## 3. Exploratory data analysis
+
+During our exploratory analysis of the datasets, we discovered that certain features had stronger correlations with train overcrowding (or lack thereof) than others.
+
+Since the primary goal of this project is to identify trains with high occupancy, we merged the “medium” and “low” occupancy categories from the original dataset into a single “low” category, creating a binary variable suitable for logistic regression. Figure 1 illustrates the number of trains and the high occupancy rate daily during the data collection period. The observations are unevenly distributed, with most of the data concentrated after mid-September. Due to this characteristic, the high occupancy rate of trains was relatively unstable during the first half of the data collection period but stabilized at around 0.3 during the second half, without showing significant cyclical patterns.
+
 ```{r EDA occupancy}
 occupancy.Panel <- data %>%
   group_by(date) %>%
@@ -226,6 +252,8 @@ grid.arrange(
   )
 )
 ```
+
+From a temporal perspective, in Figure 2, we analyzed the impact of the hour of the day and the day of the week on the high occupancy rate of trains. It is evident that trains are more crowded during morning rush hours (6–8 AM) and the longer afternoon-evening rush hours on weekdays. High occupancy rates are particularly notable on Friday afternoons, Sunday afternoons, and Monday mornings, reflecting significant weekend travel demand.
 
 ```{r EDA temporal}
 occupancy.Table <- data %>%
@@ -256,6 +284,8 @@ ggplot(data_occupancy %>% filter(count > 4),
   ) +
   scale_y_reverse()
 ```
+
+From a spatial perspective, Figures 3 and 4 show the high occupancy rate distribution across stations and origin-destination (OD) pairs (filtered for data within Belgium). In Figure 4, the transparency of the lines represents the number of trains between the OD pairs in the data. Radial routes centered around Brussels and consecutive stations along certain peripheral routes display higher high occupancy rates.
 
 ```{r EDA spatial}
 be <- st_read("be.shp", quiet = TRUE) %>% st_transform(crs = 4326)
@@ -328,6 +358,16 @@ ggplot() +
   theme(plot.caption = element_text(size = 10, face = "italic", hjust = 0))
 ```
 
+To enhance our analysis, we introduced additional variables. The distributions and correlations of these variables with occupancy are shown in Figures 5 through 7. InterCity trains accounted for the majority of the dataset, while other less common types were reclassified as “Others.” Peak trains exhibited the highest high occupancy rate, corresponding with the intuitive expectation of overcrowding during peak times. This was followed by InterCity trains, which primarily connect major cities, while local trains serving smaller towns had the lowest occupancy levels.
+
+During the data collection period, temperatures were initially stable but began to drop from mid-September onwards, while precipitation was concentrated on a few specific days. Temperature was significantly negatively correlated with occupancy (p = 0.0045), whereas precipitation showed no significant correlation.
+
+The largest stations recorded over 40,000 daily passengers, whereas most stations (59%) had fewer than 1,000. Due to the greater number of trains at larger stations, the histogram of daily passenger counts at origin/destination stations showed a U-shaped distribution. We found that the product of the logarithmic daily passenger counts of origin and destination stations was significantly positively correlated with occupancy (p = 0.0013). Therefore, we included it as a variable (“OD Passenger”) to describe the importance of the route.
+
+We also referenced the complete dataset of trains (~278,000 records) over one week during the data collection period to calculate the number of trains passing through the origin and destination stations within 30 minutes before and after the train’s travel time. Since train schedules exhibit weekly periodicity, we adjusted the original dataset to align train trips with a reference week, reducing data processing time. Approximately half of the trips had fewer than 25 trains passing through their origin or destination stations within the 1-hour window. We averaged the values for the origin and destination stations and included them as a variable ("Frequency"), which was also significantly positively correlated with occupancy (p = 0.0003).
+
+The feature distributions for occupancy emphasize these correlation characteristics. Higher density of high occupancy is more concentrated in lower temperature ranges and higher ranges of OD Passenger and Frequency. It is worth noting that although these three variables are significantly correlated with occupancy, their correlations are relatively weak, with absolute correlation coefficients between 0.06 and 0.08.
+
 ```{r EDA variables}
 train_type <- data %>%
   group_by(type) %>%
@@ -393,7 +433,7 @@ grid.arrange(
       theme_minimal(),
     ggplot(data, aes(x = freq_to)) +
       geom_histogram(bins = 20) +
-      labs(title = "One-hour Train Count of Destinations", x = "To Frequency", y = "Frequency") +
+      labs(title = "One-hour Train Count of Destinations", x = "Train", y = "Frequency") +
       theme_minimal(),
     ncol = 2,
     nrow = 2
@@ -426,6 +466,13 @@ data %>%
   theme(plot.caption = element_text(size = 10, face = "italic", hjust = 0))
 ```
 
+## 4. Logistic regression
+
+We used logistic regression for modeling, with the binary variable “Occupancy Classifier” (1 for high occupancy, 0 for low occupancy) as the dependent variable, aiming to distinguish trains with high occupancy rates.
+
+Our baseline “business as usual” model included only three variables from the original dataset: train type, hour of the day, and day of the week. Aggregating data into hourly units ensured sufficient data density in each interval while improving their differentiation.
+
+We initially experimented with grouping temporal variables by day/hour to reflect occupancy’s periodic patterns (e.g., Monday morning or Saturday evening) and grouping spatial variables (i.e., OD pairs) by passenger counts (e.g., large station to medium station). However, these approaches yielded limited improvements to the model. Through continued exploration, we identified two significant variables, OD Passenger and Frequency, and included them alongside the significant variable Temperature, but the results were still unsatisfactory.
 
 ```{r sets}
 data_model <- data %>% dplyr::select(
@@ -454,6 +501,12 @@ trainIndex <- createDataPartition(
 dataTrain <- data_model[trainIndex, ]
 dataTest <- data_model[-trainIndex, ]
 ```
+
+To better utilize the spatial and temporal characteristics of the dataset, we incorporated a nearest-neighbor approach. For each observation, we calculated the high occupancy rate of the five nearest (including the current) stations from the origin/destination and averaged the rates to estimate occupancy (“OD neighbor” variable). Temporally, we aggregated the dataset into a single week and calculated the high occupancy rate of the 20 closest trains by travel time for each observation (“Adjacent” variable). The optimal values of k were determined through trials. In a randomly selected training set, both variables were significantly positively correlated with occupancy, with correlation coefficients of 0.16 and 0.33, respectively. Including these variables substantially improved the model's explanatory and predictive power.
+
+We used cross-validation to evaluate the model’s accuracy and generalizability, splitting the dataset into 70% for training and 30% for testing. The training set was used to fit the model, while the testing set was used to optimize the threshold and evaluate model performances.
+
+Since OD neighbor and Adjacent were derived from the existing occupancy data, they were generated after the training/test split. For each random sampling, this generation process was repeated for the new sets.
 
 ```{r nearest neighbor}
 from_sum <- dataTrain %>%
@@ -546,6 +599,8 @@ dataTrain <- dataTrain %>%
   }))
 ```
 
+The logistic regression results are shown in Table 1. As expected, OD neighbor and Adjacent were the most significant predictors, while OD Passenger and Frequency were also significant. Notably, Frequency showed a negative correlation in the model, indicating that controlling other variables, an increase in train frequency reduced overcrowding. However, when considered solely, higher frequency often coincides with peak times, leading to a positive correlation, which fits our intuition. Regarding train type, compared to InterCity trains, Local and Peak trains showed marginal significance in opposite directions, while Temperature also showed a similar marginal significance.
+
 ```{r model}
 model <- glm(
   occupancy_classifier ~ type + Temperature + OD_passenger + Frequency + OD_neighbor + Adjacent,
@@ -586,7 +641,7 @@ descriptions <- tibble(
   ),
   Description = c(
     "",
-    "Includes Inter City (IC), Local (L), Peak (P), Suburban (S), and other types (combined due to lower counts) of trains. Extracted from the 'vehicle' column in the original dataset.",
+    "Includes InterCity (IC), Local (L), Peak (P), Suburban (S), and other types (combined due to lower counts) of trains. Extracted from the 'vehicle' column in the original dataset.",
     "",
     "",
     "",
@@ -606,6 +661,8 @@ kable(model_summary,
       digits = 4,
       caption = "Table 1: Summary of the Logistic Regression Model")
 ```
+
+## 5. Goodness of fit
 
 ```{r test}
 dataTest <- dataTest %>%
@@ -649,6 +706,8 @@ testProbs <- data.frame(
 )
 ```
 
+We evaluated model performance using the ROC curve (AUC), accuracy, sensitivity, and specificity. Figure 7 shows the ROC curve based on the test set, illustrating the trade-off between true positive and false positive rates as the classification threshold changes. The AUC value exceeds 0.5 as the curve lies above the y = x line, indicating that it has predictive ability to some extent.
+
 ```{r ROC}
 auc_value <- auc(testProbs$Outcome, testProbs$Probs)
 
@@ -676,6 +735,10 @@ ggplot(testProbs, aes(d = as.numeric(Outcome), m = Probs)) +
   labs(title = "ROC Curve", caption = "Figure 9") +
   theme(plot.caption = element_text(size = 10, face = "italic", hjust = 0))
 ```
+
+## 6. Cost-benefit analysis
+
+To determine the optimal threshold for high/low occupancy classification, we developed a simple cost-benefit analysis model, as shown in Table 2. Incorporating passenger experiences, we used “Utility” instead of “Revenue” to measure the potential benefits of applying the model. Negative predictions (low occupancy) resulted in zero utility since they lead to no schedule adjustments. Positive predictions (high occupancy) resulted in schedule adjustments. For true positives, avoiding discomfort and delays after schedule optimization yielded a utility of 2, while false positives incurred a utility of -1 due to the cost of deploying additional trains. This matrix reflects our prioritization of user experience over infrastructure investment, though the real-world model may differ. Implications of our cost-benefit-analysis approach will be explained later in our analysis reflection. 
 
 ```{r cost benefit}
 confusion_matrix_table <- data.frame(
@@ -706,6 +769,8 @@ kable(
   caption = "Table 2: Cost-Benefit Analysis"
 )
 ```
+
+By testing different thresholds, we calculated utility and identified the optimal threshold at 0.32, where utility peaked, as shown in Figure 9. Using this threshold, the model achieved an accuracy of 0.6109, sensitivity of 0.5143, and specificity of 0.6562. Since the dataset was imbalanced (low occupancy rates were much higher than high occupancy rates), improving sensitivity required sacrificing accuracy. Compared to random guessing (31% high occupancy rate), the model significantly improved the identification of high occupancy trains. Although the improvement was modest, it demonstrated that the model could still provide valuable information for transportation planners to optimize schedules.
 
 ```{r threshold}
 iterateThresholds <- function(data) {
@@ -812,6 +877,10 @@ cat(
   "\n"
 )
 ```
+
+## 7. Cross validation
+
+To reduce the instability of single-run predictions, we repeated the above process (splitting the dataset, fitting the model) 100 times to determine the optimal threshold, then repeated it another 100 times to calculate AUC, sensitivity, and specificity. Figure 10 shows the distributions of these metrics over 100 runs. Results show that AUC was consistently above 0.5, indicating the model outperformed random guessing. However, sensitivity and optimal threshold have high variances, reflecting the challenges of modeling occupancy influenced by complex real-world patterns. Ultimately, the model achieved an average sensitivity of 0.5405 and specificity of 0.6376, slightly better than the initial simulation.
 
 ```{r repitition threshold}
 thresholds <- list()
@@ -1210,6 +1279,8 @@ for (i in 1:100) {
 # cat("Average Specificity over 100 runs:", round(avg_specificity, 4), "\n")
 ```
 
+In 100 simulations, the improved model outperformed the “business as usual” model (which included only train type, hour of the day, and day of the week) in average utility. The improved model raised the utility from 69.28 to 72.48, an approximate 4.6% increase, showing a relatively notable improvement. This demonstrates that the model performs better than the traditional methods employed by transportation planners, providing practical insights to reduce overcrowding.
+
 ```{r plot, include=TRUE}
 metrics_data <- data.frame(
   Threshold = sapply(thresholds, function(x)
@@ -1263,3 +1334,11 @@ metrics_means %>%
   pull(output) %>%
   cat(sep = "\n")
 ```
+
+## 8. Discussion and conclusion
+
+Our analysis meets the use case we set to address by allowing Belgian transportation planners to forecast train occupancy months in advance and allowing them to change schedules to minimize potential overcrowding. It has a wide variety of input data, which allows for a large degree of customizability for transportation planners. They would, theoretically, input weeks worth of schedules in our model and get results. Even so, we realize that forecasting far in advance is difficult. There are many variables that can change. The Covid-19 pandemic showed that even traditional 9-5 working patterns can be fundamentally disrupted. Our model’s less-than-optimal sensitivity of 0.507, and promising specificity of 0.667 shows the difficulty behind making scheduling predictions. In that sense, when purely considering our cost-benefit analysis of train overcrowding, our model does not do an optimal job at maximizing true positives. Our model does perform better in terms of specificity or the true negative rate. However, even this rate could see improvements. In that light, the model we created may not be as exceptional at predicting overcrowding as we would like. That said, it is still useful for transportation planners. Our ROC curve demonstrates that the model does actually perform better than a coin toss (with an ROC of 0.607), which is essentially what transportation planners are doing now (or rather an educated guess). While the educated guess method may have worked in the past, we believe that recent history has shown that this method has severe flaws. Our analysis outperformed the “business as usual” case in every simulation we ran, and that was with our “business as usual case” simulation representing a more analytical approach to current transportation planning than reality (where reality involves more human analysis, rather than data-based modeling). We set out to help predict high occupancy trains better than the current methodology, and our model does that. However, we acknowledge that there are serious flaws in the model that could be flushed out and that the lack of input data regarding overcrowding hampered our ability to make accurate predictions. Even so, we believe that the model methodology is still a sound way to solve for overcrowding on Belgian trains. 
+
+We believe that the original dataset we worked with presented a significant challenge for us. The dataset on train occupancy characteristics contained a small (and varied) sample set of trains. For instance, certain months (mainly August and early September) seemed to have far fewer trains than in October (which is not the case in reality). That is because the dataset was an incomplete picture of trains in Belgium and thus an incomplete picture of occupancy. If we had a complete picture of train occupancy throughout the entire year (rather than a small sample dataset) we believe that our model would be more accurate. Moreover, the months present in the dataset only contained one public holiday, so the generalizability of the model to other timeframes with holidays would be poor. Obtaining a dataset with the full year of occupancy would also mean that we would obtain a full year of temperature data and a full picture of train scheduling. While we were able to attain the associated train frequency per station within the time frame of the dataset, an in-depth schedule by train run would be a better determiner of frequency. Our model’s issues with accuracy, sensitivity, and specificity, would be greatly helped with a complete dataset picture. 
+
+We also believe that coordination with SNCB to create a more accurate and useful cost-benefit analysis is paramount. Our current cost-benefit analysis is missing much of the detail necessary for SNCB planners to understand the impact of overcrowding on the system or the cost of adding new trains to combat overcrowding. For instance, we would like to collect data on the cost of servicing additional trains, the cost of operators per additional train, and the cost of additional maintenance on running more trains (both in terms of per train and systemwide). We would also like to know the relative importance to SNCB of minimizing delays and passenger discomfort over the costs associated with servicing more trains to limit overcrowding. Our model’s cost-benefit analysis is designed with the concept that the most important variable for transportation planners (and our use case) is to limit overcrowding. Therefore, we assigned the true positive (Predicted train is overcrowded and train is overcrowded) variable with a number of “2” in relative importance, assuming that transportation planners add trains to the system to avoid overcrowding and delays. Meanwhile, we assigned the false positive variable (Predicted train was overcrowded and train is not overcrowded) with a value of -1, to indicate the cost of sending out additional trains that do not impact overcrowding. These numbers are our best guesses at the relative importance of these cases to SNCB planners, but only SNCB planners could indicate the actual importance. Therefore, working with SNCB to properly create an accurate cost-benefit analysis for their use is critical. Since ScheduRail is designed for SNCB planners, it will need their input to be successful. 
